@@ -104,9 +104,8 @@ def main():
             st.write(df.head())
 
             columns = df.columns.tolist()
-            mrr_columns = [col for col in columns if col.lower().startswith('mrr')]
-            account_columns = ['Code Tiers', 'Raison Sociale', 'Account type lib', 'Account sub type lib']
             
+            # Allow user to select the balance column
             default_balance_column = 'Mrr global' if 'Mrr global' in columns else columns[0]
             balance_column = st.selectbox(
                 "Select column to balance territories", 
@@ -124,11 +123,11 @@ def main():
                 format="%.2f"
             )
             
-            default_columns = account_columns + [balance_column] if all(col in columns for col in account_columns + [balance_column]) else columns[:min(5, len(columns))]
+            # Allow user to select additional columns to include
             selected_columns = st.multiselect(
                 "Select additional columns to include", 
                 options=columns, 
-                default=default_columns
+                default=[balance_column]
             )
 
             if st.button("Create Balanced Territories"):
