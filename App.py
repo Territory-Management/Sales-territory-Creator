@@ -5,7 +5,6 @@ import base64
 import chardet
 from typing import List, Optional
 
-
 def load_data(file) -> Optional[pd.DataFrame]:
     """Charge le fichier CSV en détectant l'encodage et gère les erreurs"""
     try:
@@ -21,59 +20,22 @@ def load_data(file) -> Optional[pd.DataFrame]:
         st.error(f"Erreur lors du chargement du fichier : {str(e)}")
         return None
 
-
 def normalize_numeric_column(series: pd.Series) -> pd.Series:
     """Normalise les colonnes avec des symboles monétaires et des caractères non numériques"""
     return pd.to_numeric(
-        series.astype(str).str.replace(r'[€$£,]', '', regex=True).str.replace(',', '.').str.strip(),
+        series.astype(str).str.replace(r'[\u20ac$\u00a3,]', '', regex=True).str.replace(',', '.').str.strip(),
         errors='coerce'
     )
 
-
-def filter_by_termination_date(df: pd.DataFrame, years: List[int]) -> pd.DataFrame:
-    """Filtrer les lignes où la date de résiliation correspond aux années spécifiées"""
-    # Vérifier si la colonne 'Dt resiliation contrat all' existe
-    if 'Dt resiliation contrat all' not in df.columns:
-        st.error("La colonne 'Dt resiliation contrat all' est introuvable dans les données.")
-        return df  # Retourner le DataFrame sans modification
-
-    # Convertir la colonne 'Dt resiliation contrat all' en datetime
-    df['Dt resiliation contrat all'] = pd.to_datetime(df['Dt resiliation contrat all'], errors='coerce')
-
-    # Filtrer par les années spécifiées
-    return df[df['Dt resiliation contrat all'].dt.year.isin(years)]
-
-
-def calculate_weights(balance_columns: List[str]) -> List[float]:
-    """Calculer les poids normalisés pour les colonnes choisies"""
-    weights = []
-    for col in balance_columns:
-        weight = st.slider(f"Poids pour {col}", 0.0, 1.0, 1.0 / len(balance_columns), 0.1)
-        weights.append(weight)
-    # Normaliser les poids pour qu'ils somment à 1
-    total = sum(weights)
-    return [w / total for w in weights]
-
-
-def balance_territories(territories: List[pd.DataFrame], balance_columns: List[str]) -> List[pd.DataFrame]:
-    """Redistribue les éléments entre les territoires pour minimiser les écarts"""
-    # Calculer les sommes des colonnes pour chaque territoire
-    sums = {i: territory[balance_columns].sum() for i, territory in enumerate(territories)}
-
-    # Calculer l'écart total
-    diff = {i: sum(abs(sums[i] - sums[j])) for i in sums for j in sums if i != j}
-
-    # Redistribution simple : échange les éléments entre les territoires pour équilibrer les sommes
-    for i in range(len(territories)):
-        for j in range(i + 1, len(territories)):
-            if diff.get(i, 0) > diff.get(j, 0):
-                # Échanger des éléments entre les territoires
-                transfer_element = territories[i].iloc[0]  # Éléments les plus "lourds"
-                territories[i] = territories[i].drop(territories[i].index[0])
-                territories[j] = territories[j].append(transfer_element)
+def distribute_termination_clients(df: pd.DataFrame, termination_clients: pd.DataFrame, num_territories: int) -> List[pd.DataFrame]:
+    """Ventile les clients avec une date de résiliation équitablement parmi les territoires"""
+    territories = [df.iloc[i::num_territories] for i in range(num_territories)]
+    
+    # Ajout des clients avec résiliation équitablement
+    for i, client in enumerate(termination_clients.itertuples(index=False)):
+        territories[i % num_territories] = pd.concat([territories[i % num_territories], pd.DataFrame([client._asdict()])], ignore_index=True)
     
     return territories
-
 
 def create_territories(
     df: pd.DataFrame,
@@ -86,9 +48,12 @@ def create_territories(
     # Créer une copie de travail du DataFrame
     working_df = df.copy()
 
-    # Si des années de résiliation sont spécifiées, filtrer les données
+    # Si des années de résiliation sont spécifiées, séparer les clients
+    termination_clients = pd.DataFrame()
     if years:
-        working_df = filter_by_termination_date(working_df, years)
+        working_df['Dt resiliation contrat all'] = pd.to_datetime(working_df['Dt resiliation contrat all'], errors='coerce')
+        termination_clients = working_df[working_df['Dt resiliation contrat all'].dt.year.isin(years)]
+        working_df = working_df[~working_df['Dt resiliation contrat all'].dt.year.isin(years)]
 
     # Normaliser les colonnes
     for col in balance_columns:
@@ -107,8 +72,13 @@ def create_territories(
     # Répartir les données en territoires
     territories = [working_df.iloc[i::num_territories] for i in range(num_territories)]
 
-    # Rééquilibrage pour minimiser les écarts
-    territories = balance_territories(territories, balance_columns)
+    # Ventiler les clients avec résiliation équitablement
+    if not termination_clients.empty:
+        territories = distribute_termination_clients(pd.concat(territories, ignore_index=True), termination_clients, num_territories)
+
+    # Ajouter une colonne "Territory" pour identifier chaque territoire
+    for i, territory in enumerate(territories):
+        territory['Territory'] = i + 1
 
     # Calcul des métriques pour chaque territoire
     metrics = []
@@ -120,13 +90,11 @@ def create_territories(
 
     return territories, pd.DataFrame(metrics)
 
-
 def get_download_link(df: pd.DataFrame, filename: str) -> str:
     """Génère un lien de téléchargement CSV"""
     csv = df.to_csv(index=False)
     b64 = base64.b64encode(csv.encode()).decode()
     return f'<a href="data:file/csv;base64,{b64}" download="{filename}">Télécharger {filename}</a>'
-
 
 def main():
     st.title('Fast Territory Balancer')
@@ -170,7 +138,9 @@ def main():
             # Calculer les poids si nécessaire
             weights = None
             if use_weights:
-                weights = calculate_weights(balance_columns)
+                weights = [st.slider(f"Poids pour {col}", 0.0, 1.0, 1.0 / len(balance_columns), 0.1) for col in balance_columns]
+                total = sum(weights)
+                weights = [w / total for w in weights]
 
             # Créer les territoires lorsque l'utilisateur clique sur le bouton
             if st.button("Créer les territoires"):
@@ -182,6 +152,15 @@ def main():
                 st.subheader("Métriques des territoires")
                 st.write(metrics)
 
+                # Fusionner tous les territoires en un seul DataFrame avec leur numéro de territoire
+                combined_territories = pd.concat(territories, ignore_index=True)
+
+                # Lien pour télécharger le fichier combiné
+                st.markdown(
+                    get_download_link(combined_territories, "repartition_territoires.csv"),
+                    unsafe_allow_html=True
+                )
+
                 # Afficher les territoires avec des liens de téléchargement
                 for i, territory in enumerate(territories):
                     with st.expander(f"Territoire {i+1} ({len(territory)} comptes)"):
@@ -190,7 +169,6 @@ def main():
                             get_download_link(territory, f"territoire_{i+1}.csv"),
                             unsafe_allow_html=True
                         )
-
 
 if __name__ == "__main__":
     main()
