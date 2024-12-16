@@ -138,7 +138,8 @@ def main():
             # Calculer les poids si nécessaire
             weights = None
             if use_weights:
-                weights = [st.slider(f"Poids pour {col}", 0.0, 1.0, 1.0 / len(balance_columns), 0.1) for col in balance_columns]
+                st.write("Attribuer des poids absolus (les poids seront normalisés automatiquement) :")
+                weights = [st.number_input(f"Poids pour {col}", min_value=0.0, value=100.0, step=10.0) for col in balance_columns]
                 total = sum(weights)
                 weights = [w / total for w in weights]
 
