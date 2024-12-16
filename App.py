@@ -30,6 +30,12 @@ def normalize_numeric_column(series: pd.Series) -> pd.Series:
     )
 
 
+def filter_by_termination_date(df: pd.DataFrame, year: int) -> pd.DataFrame:
+    """Filtrer les lignes où la date de résiliation correspond à l'année spécifiée"""
+    df['date_de_resiliation'] = pd.to_datetime(df['date_de_resiliation'], errors='coerce')  # Conversion en datetime
+    return df[df['date_de_resiliation'].dt.year == year]  # Filtrer par année
+
+
 def calculate_weights(balance_columns: List[str]) -> List[float]:
     """Calculer les poids normalisés pour les colonnes choisies"""
     weights = []
@@ -65,11 +71,16 @@ def create_territories(
     df: pd.DataFrame,
     num_territories: int,
     balance_columns: List[str],
-    weights: Optional[List[float]] = None
+    weights: Optional[List[float]] = None,
+    year: Optional[int] = None
 ) -> tuple[List[pd.DataFrame], pd.DataFrame]:
     """Crée des territoires équilibrés avec un ajustement des écarts"""
     # Créer une copie de travail du DataFrame
     working_df = df.copy()
+
+    # Si une année de résiliation est spécifiée, filtrer les données
+    if year:
+        working_df = filter_by_termination_date(working_df, year)
 
     # Normaliser les colonnes
     for col in balance_columns:
@@ -141,6 +152,9 @@ def main():
             with col2:
                 use_weights = st.checkbox("Utiliser des poids personnalisés", value=False)
 
+            # Sélectionner l'année de résiliation pour filtrer
+            year = st.selectbox("Sélectionner l'année de résiliation", [2025, 2026])
+
             # Calculer les poids si nécessaire
             weights = None
             if use_weights:
@@ -149,7 +163,7 @@ def main():
             # Créer les territoires lorsque l'utilisateur clique sur le bouton
             if st.button("Créer les territoires"):
                 territories, metrics = create_territories(
-                    df, num_territories, balance_columns, weights
+                    df, num_territories, balance_columns, weights, year
                 )
 
                 # Afficher les métriques des territoires
