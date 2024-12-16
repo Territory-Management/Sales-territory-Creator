@@ -30,10 +30,18 @@ def normalize_numeric_column(series: pd.Series) -> pd.Series:
     )
 
 
-def filter_by_termination_date(df: pd.DataFrame, year: int) -> pd.DataFrame:
-    """Filtrer les lignes où la date de résiliation correspond à l'année spécifiée"""
-    df['date_de_resiliation'] = pd.to_datetime(df['date_de_resiliation'], errors='coerce')  # Conversion en datetime
-    return df[df['date_de_resiliation'].dt.year == year]  # Filtrer par année
+def filter_by_termination_date(df: pd.DataFrame, years: List[int]) -> pd.DataFrame:
+    """Filtrer les lignes où la date de résiliation correspond aux années spécifiées"""
+    # Vérifier si la colonne 'Dt resiliation contrat all' existe
+    if 'Dt resiliation contrat all' not in df.columns:
+        st.error("La colonne 'Dt resiliation contrat all' est introuvable dans les données.")
+        return df  # Retourner le DataFrame sans modification
+
+    # Convertir la colonne 'Dt resiliation contrat all' en datetime
+    df['Dt resiliation contrat all'] = pd.to_datetime(df['Dt resiliation contrat all'], errors='coerce')
+
+    # Filtrer par les années spécifiées
+    return df[df['Dt resiliation contrat all'].dt.year.isin(years)]
 
 
 def calculate_weights(balance_columns: List[str]) -> List[float]:
@@ -72,15 +80,15 @@ def create_territories(
     num_territories: int,
     balance_columns: List[str],
     weights: Optional[List[float]] = None,
-    year: Optional[int] = None
+    years: Optional[List[int]] = None
 ) -> tuple[List[pd.DataFrame], pd.DataFrame]:
     """Crée des territoires équilibrés avec un ajustement des écarts"""
     # Créer une copie de travail du DataFrame
     working_df = df.copy()
 
-    # Si une année de résiliation est spécifiée, filtrer les données
-    if year:
-        working_df = filter_by_termination_date(working_df, year)
+    # Si des années de résiliation sont spécifiées, filtrer les données
+    if years:
+        working_df = filter_by_termination_date(working_df, years)
 
     # Normaliser les colonnes
     for col in balance_columns:
@@ -152,8 +160,12 @@ def main():
             with col2:
                 use_weights = st.checkbox("Utiliser des poids personnalisés", value=False)
 
-            # Sélectionner l'année de résiliation pour filtrer
-            year = st.selectbox("Sélectionner l'année de résiliation", [2025, 2026])
+            # Sélectionner plusieurs années de résiliation pour filtrer
+            years = st.multiselect(
+                "Sélectionner les années de résiliation",
+                options=[2024, 2025, 2026],
+                default=[2024]
+            )
 
             # Calculer les poids si nécessaire
             weights = None
@@ -163,7 +175,7 @@ def main():
             # Créer les territoires lorsque l'utilisateur clique sur le bouton
             if st.button("Créer les territoires"):
                 territories, metrics = create_territories(
-                    df, num_territories, balance_columns, weights, year
+                    df, num_territories, balance_columns, weights, years
                 )
 
                 # Afficher les métriques des territoires
