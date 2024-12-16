@@ -57,20 +57,22 @@ class TerritoryCreator:
     def create_equitable_territories(
         self, 
         num_territories: int, 
-        balance_column: str, 
+        balance_columns: List[str], 
         max_imbalance: float = 0.05
     ) -> List[pd.DataFrame]:
-        self._normalize_balance_column(balance_column)
-        df_sorted = self.df.sort_values(balance_column, ascending=False).copy()
+        for column in balance_columns:
+            self._normalize_balance_column(column)
+        
+        df_sorted = self.df.sort_values(balance_columns, ascending=False).copy()
         territories = [df_sorted.iloc[i::num_territories].reset_index(drop=True) for i in range(num_territories)]
         
-        mrr_values = [territory[balance_column].sum() for territory in territories]
-        client_counts = [len(territory) for territory in territories]
+        imbalance_ratios = []
+        for column in balance_columns:
+            values = [territory[column].sum() for territory in territories]
+            ratio = (max(values) - min(values)) / np.mean(values)
+            imbalance_ratios.append(ratio)
         
-        mrr_ratio = (max(mrr_values) - min(mrr_values)) / np.mean(mrr_values)
-        client_ratio = (max(client_counts) - min(client_counts)) / np.mean(client_counts)
-        
-        if mrr_ratio <= max_imbalance and client_ratio <= max_imbalance:
+        if all(ratio <= max_imbalance for ratio in imbalance_ratios):
             return territories
         else:
             st.warning("Could not find perfectly balanced territories. Returning current attempt.")
@@ -105,12 +107,11 @@ def main():
 
             columns = df.columns.tolist()
             
-            # Allow user to select the balance column
-            default_balance_column = 'Mrr global' if 'Mrr global' in columns else columns[0]
-            balance_column = st.selectbox(
-                "Select column to balance territories", 
+            # Allow user to select the balance columns
+            balance_columns = st.multiselect(
+                "Select columns to balance territories", 
                 options=columns, 
-                index=columns.index(default_balance_column) if default_balance_column in columns else 0
+                default=[columns[0]]
             )
             
             num_territories = st.number_input("Number of territories", min_value=1, value=2, step=1)
@@ -127,7 +128,7 @@ def main():
             selected_columns = st.multiselect(
                 "Select additional columns to include", 
                 options=columns, 
-                default=[balance_column]
+                default=balance_columns
             )
 
             if st.button("Create Balanced Territories"):
@@ -136,14 +137,14 @@ def main():
                 try:
                     territories = territory_creator.create_equitable_territories(
                         num_territories, 
-                        balance_column, 
+                        balance_columns, 
                         max_imbalance
                     )
 
                     for i, territory in enumerate(territories):
                         st.subheader(f"Territory {i+1}")
                         st.write(territory)
-                        st.write(f"Total {balance_column}: {territory[balance_column].sum():.2f}")
+                        st.write(f"Total {', '.join(balance_columns)}: {[territory[col].sum() for col in balance_columns]}")
                         st.write(f"Number of Clients: {len(territory)}")
                         st.markdown(
                             TerritoryCreator.get_table_download_link(territory, f"territory_{i+1}.csv"), 
@@ -151,11 +152,14 @@ def main():
                         )
                     
                     st.subheader("Territory Summary Statistics")
-                    summary = pd.DataFrame({
+                    summary_data = {
                         'Territory': range(1, len(territories) + 1),
-                        f'Total {balance_column}': [territory[balance_column].sum() for territory in territories],
                         'Number of Clients': [len(territory) for territory in territories]
-                    })
+                    }
+                    for column in balance_columns:
+                        summary_data[f'Total {column}'] = [territory[column].sum() for territory in territories]
+                    
+                    summary = pd.DataFrame(summary_data)
                     st.write(summary)
                     st.markdown(
                         TerritoryCreator.get_table_download_link(summary, "territory_summary.csv"), 
