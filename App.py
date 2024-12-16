@@ -12,8 +12,8 @@ def load_data(file) -> Optional[pd.DataFrame]:
         file.seek(0)
         encoding = chardet.detect(raw_data)['encoding']
         
-        # Try to read with detected encoding
-        df = pd.read_csv(file, encoding=encoding)
+        # Try to read with detected encoding and python engine for better delimiter detection
+        df = pd.read_csv(file, encoding=encoding, engine='python', sep=None)
         return df
     except Exception as e:
         # Fallback to common encodings
@@ -21,7 +21,7 @@ def load_data(file) -> Optional[pd.DataFrame]:
         for enc in encodings:
             try:
                 file.seek(0)
-                df = pd.read_csv(file, encoding=enc)
+                df = pd.read_csv(file, encoding=enc, engine='python', sep=None)
                 return df
             except:
                 continue
@@ -87,6 +87,7 @@ def main():
         
         if df is not None:
             st.write("Data Preview:", df.head())
+            st.write("Available columns:", df.columns.tolist())  # Added to debug column names
 
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
             balance_columns = st.multiselect(
