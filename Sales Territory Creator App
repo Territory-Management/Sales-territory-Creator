@@ -1,0 +1,41 @@
+# app.py
+# (The content of this file is the same as in the previous message)
+
+# requirements.txt
+streamlit
+pandas
+numpy
+
+# .gitignore
+venv/
+*.pyc
+.env
+.DS_Store
+
+# README.md
+# Sales Territory Creator
+
+This Streamlit app helps create balanced sales territories from CSV data. Upload your CSV file, select columns for balancing and grouping, and the app will generate territories based on your specifications.
+
+## How to use
+
+1. Upload a CSV file with your sales data.
+2. Select a column to balance territories (e.g., MRR or number of accounts).
+3. Optionally, select a column to group by (e.g., postal code or city).
+4. Choose additional columns to include in the output.
+5. Specify the number of territories to create.
+6. Click "Create Territories" to generate balanced territories.
+
+The app will display each territory's data, along with summary statistics and download links for CSV files.
+
+## Running the app locally
+
+To run this app locally:
+
+1. Clone this repository.
+2. Install the required packages: `pip install -r requirements.txt`
+3. Run the app: `streamlit run app.py`
+
+## Deployed app
+
+You can access the deployed version of this app at: [Your Streamlit Sharing URL will go here]
