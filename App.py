@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import base64
 import chardet
-from typing import List, Optional, Union
+from typing import List, Optional
 
 class TerritoryCreator:
     def __init__(self, df: pd.DataFrame):
@@ -18,6 +18,7 @@ class TerritoryCreator:
         return result['encoding']
 
     @staticmethod
+    @st.cache_data
     def load_data(file) -> Optional[pd.DataFrame]:
         encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'windows-1252']
         try:
@@ -39,111 +40,41 @@ class TerritoryCreator:
         st.error("Could not load the file. Please check the file format and encoding.")
         return None
 
-    def _normalize_column(self, column: str) -> None:
-        """
-        Normalize a column to ensure it's numeric.
-        Handles currency symbols, commas, and other common formatting issues.
-        """
-        if not pd.api.types.is_numeric_dtype(self.df[column]):
+    def _normalize_balance_column(self, balance_column: str) -> None:
+        if not pd.api.types.is_numeric_dtype(self.df[balance_column]):
             try:
-                self.df[column] = (
-                    self.df[column]
+                self.df[balance_column] = (
+                    self.df[balance_column]
                     .astype(str)
                     .str.replace(r'[€$£,]', '', regex=True)
                     .str.replace(',', '.')
                     .astype(float)
                 )
             except Exception as e:
-                st.error(f"Could not convert {column} to numeric values: {str(e)}")
+                st.error(f"Could not convert {balance_column} to numeric values: {str(e)}")
                 raise
 
     def create_equitable_territories(
         self, 
         num_territories: int, 
-        balance_columns: List[str], 
-        weights: Optional[List[float]] = None,
+        balance_column: str, 
         max_imbalance: float = 0.05
     ) -> List[pd.DataFrame]:
-        """
-        Create territories with balanced metrics across multiple columns.
-        
-        :param num_territories: Number of territories to create
-        :param balance_columns: List of columns to balance
-        :param weights: Optional list of weights for each balance column
-        :param max_imbalance: Maximum allowed imbalance ratio
-        :return: List of territory DataFrames
-        """
-        # Normalize all balance columns
-        for column in balance_columns:
-            self._normalize_column(column)
-        
-        # Apply weights if provided, otherwise use equal weights
-        if weights is None:
-            weights = [1.0 / len(balance_columns)] * len(balance_columns)
-        
-        # Validate weights
-        if len(weights) != len(balance_columns):
-            raise ValueError("Number of weights must match number of balance columns")
-        
-        # Normalize weights
-        total_weight = sum(weights)
-        normalized_weights = [w / total_weight for w in weights]
-        
-        # Create a composite score column
-        composite_column = 'territory_balance_score'
-        self.df[composite_column] = sum(
-            self.df[col] * weight 
-            for col, weight in zip(balance_columns, normalized_weights)
-        )
-        
-        # Sort by the composite score
-        df_sorted = self.df.sort_values(composite_column, ascending=False).copy()
-        
-        # Create initial territories
+        self._normalize_balance_column(balance_column)
+        df_sorted = self.df.sort_values(balance_column, ascending=False).copy()
         territories = [df_sorted.iloc[i::num_territories].reset_index(drop=True) for i in range(num_territories)]
         
-        # Calculate metrics
-        territory_metrics = []
-        for territory in territories:
-            metrics = {}
-            for col in balance_columns:
-                metrics[f'{col}_total'] = territory[col].sum()
-                metrics[f'{col}_mean'] = territory[col].mean()
-            metrics['client_count'] = len(territory)
-            territory_metrics.append(metrics)
+        mrr_values = [territory[balance_column].sum() for territory in territories]
+        client_counts = [len(territory) for territory in territories]
         
-        # Prepare summary output
-        st.subheader("Territory Balance Metrics")
-        summary_data = []
-        for i, metrics in enumerate(territory_metrics):
-            summary_data.append({
-                'Territory': i + 1,
-                **{k: v for k, v in metrics.items()}
-            })
-        summary_df = pd.DataFrame(summary_data)
-        st.write(summary_df)
+        mrr_ratio = (max(mrr_values) - min(mrr_values)) / np.mean(mrr_values)
+        client_ratio = (max(client_counts) - min(client_counts)) / np.mean(client_counts)
         
-        # Calculate imbalance ratios
-        imbalance_ratios = {}
-        for col in balance_columns:
-            total_values = [metrics[f'{col}_total'] for metrics in territory_metrics]
-            mean_value = np.mean(total_values)
-            ratio = (max(total_values) - min(total_values)) / mean_value
-            imbalance_ratios[col] = ratio
-        
-        # Check overall balance
-        max_observed_imbalance = max(imbalance_ratios.values())
-        st.write("Imbalance Ratios:", imbalance_ratios)
-        
-        if max_observed_imbalance <= max_imbalance:
-            st.success(f"Territories created successfully with acceptable imbalance of {max_observed_imbalance:.2%}")
+        if mrr_ratio <= max_imbalance and client_ratio <= max_imbalance:
+            return territories
         else:
-            st.warning(f"Could not find perfectly balanced territories. Maximum imbalance: {max_observed_imbalance:.2%}")
-        
-        # Drop the temporary composite score column
-        self.df.drop(columns=[composite_column], inplace=True)
-        
-        return territories
+            st.warning("Could not find perfectly balanced territories. Returning current attempt.")
+            return territories
 
     @staticmethod
     def get_table_download_link(df: pd.DataFrame, filename: str) -> str:
@@ -153,7 +84,7 @@ class TerritoryCreator:
         return href
 
 def main():
-    st.title('Advanced Multi-Metric Sales Territory Creator')
+    st.title('Advanced Sales Territory Creator')
 
     uploaded_file = st.file_uploader("Choose a CSV file", type="csv")
     if uploaded_file is not None:
@@ -172,37 +103,17 @@ def main():
             st.write("Data Preview:")
             st.write(df.head())
 
-            # Get list of numeric columns
-            numeric_columns = df.select_dtypes(include=['float64', 'int64']).columns.tolist()
+            columns = df.columns.tolist()
+            mrr_columns = [col for col in columns if col.lower().startswith('mrr')]
+            account_columns = ['Code Tiers', 'Raison Sociale', 'Account type lib', 'Account sub type lib']
             
-            # Identify potential balance columns
-            default_balance_columns = ['Mrr global'] if 'Mrr global' in numeric_columns else numeric_columns[:3]
-            
-            # Multi-select for balance columns
-            balance_columns = st.multiselect(
-                "Select columns to balance territories", 
-                options=numeric_columns, 
-                default=default_balance_columns
+            default_balance_column = 'Mrr global' if 'Mrr global' in columns else columns[0]
+            balance_column = st.selectbox(
+                "Select column to balance territories", 
+                options=columns, 
+                index=columns.index(default_balance_column) if default_balance_column in columns else 0
             )
             
-            # Column weights
-            if balance_columns:
-                weights = []
-                with st.expander("Adjust Column Weights"):
-                    for col in balance_columns:
-                        weight = st.slider(
-                            f"Weight for {col}", 
-                            min_value=0.0, 
-                            max_value=1.0, 
-                            value=1.0 / len(balance_columns), 
-                            step=0.05, 
-                            format="%.2f"
-                        )
-                        weights.append(weight)
-            else:
-                weights = None
-            
-            # Other parameters
             num_territories = st.number_input("Number of territories", min_value=1, value=2, step=1)
             max_imbalance = st.slider(
                 "Maximum Territory Imbalance (%)", 
@@ -213,46 +124,44 @@ def main():
                 format="%.2f"
             )
             
-            # Account and identification columns
-            account_columns = ['Code Tiers', 'Raison Sociale', 'Account type lib', 'Account sub type lib']
-            default_columns = [
-                col for col in account_columns + balance_columns 
-                if col in df.columns
-            ]
+            default_columns = account_columns + [balance_column] if all(col in columns for col in account_columns + [balance_column]) else columns[:min(5, len(columns))]
             selected_columns = st.multiselect(
-                "Select additional columns to include in territories", 
-                options=df.columns.tolist(), 
+                "Select additional columns to include", 
+                options=columns, 
                 default=default_columns
             )
 
             if st.button("Create Balanced Territories"):
-                if not balance_columns:
-                    st.error("Please select at least one column to balance")
-                    return
-                
                 df_selected = df[selected_columns]
                 
                 try:
                     territories = territory_creator.create_equitable_territories(
                         num_territories, 
-                        balance_columns, 
-                        weights,
+                        balance_column, 
                         max_imbalance
                     )
 
                     for i, territory in enumerate(territories):
                         st.subheader(f"Territory {i+1}")
                         st.write(territory)
-                        
-                        # Display total values for balance columns
-                        for col in balance_columns:
-                            st.write(f"Total {col}: {territory[col].sum():.2f}")
-                        
+                        st.write(f"Total {balance_column}: {territory[balance_column].sum():.2f}")
                         st.write(f"Number of Clients: {len(territory)}")
                         st.markdown(
                             TerritoryCreator.get_table_download_link(territory, f"territory_{i+1}.csv"), 
                             unsafe_allow_html=True
                         )
+                    
+                    st.subheader("Territory Summary Statistics")
+                    summary = pd.DataFrame({
+                        'Territory': range(1, len(territories) + 1),
+                        f'Total {balance_column}': [territory[balance_column].sum() for territory in territories],
+                        'Number of Clients': [len(territory) for territory in territories]
+                    })
+                    st.write(summary)
+                    st.markdown(
+                        TerritoryCreator.get_table_download_link(summary, "territory_summary.csv"), 
+                        unsafe_allow_html=True
+                    )
 
                 except Exception as e:
                     st.error(f"Error creating territories: {str(e)}")
