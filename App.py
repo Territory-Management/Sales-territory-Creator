@@ -24,7 +24,6 @@ def load_data(file) -> Optional[pd.DataFrame]:
 
 def normalize_numeric_column(series: pd.Series) -> pd.Series:
     """Normalise les colonnes avec des symboles monétaires et des caractères non numériques"""
-    # Supprimer les symboles monétaires et les virgules, puis convertir en numérique
     return pd.to_numeric(
         series.astype(str).str.replace(r'[€$£,]', '', regex=True).str.replace(',', '.').str.strip(),
         errors='coerce'
@@ -42,13 +41,33 @@ def calculate_weights(balance_columns: List[str]) -> List[float]:
     return [w / total for w in weights]
 
 
+def balance_territories(territories: List[pd.DataFrame], balance_columns: List[str]) -> List[pd.DataFrame]:
+    """Redistribue les éléments entre les territoires pour minimiser les écarts"""
+    # Calculer les sommes des colonnes pour chaque territoire
+    sums = {i: territory[balance_columns].sum() for i, territory in enumerate(territories)}
+
+    # Calculer l'écart total
+    diff = {i: sum(abs(sums[i] - sums[j])) for i in sums for j in sums if i != j}
+
+    # Redistribution simple : échange les éléments entre les territoires pour équilibrer les sommes
+    for i in range(len(territories)):
+        for j in range(i + 1, len(territories)):
+            if diff.get(i, 0) > diff.get(j, 0):
+                # Échanger des éléments entre les territoires
+                transfer_element = territories[i].iloc[0]  # Éléments les plus "lourds"
+                territories[i] = territories[i].drop(territories[i].index[0])
+                territories[j] = territories[j].append(transfer_element)
+    
+    return territories
+
+
 def create_territories(
     df: pd.DataFrame,
     num_territories: int,
     balance_columns: List[str],
     weights: Optional[List[float]] = None
 ) -> tuple[List[pd.DataFrame], pd.DataFrame]:
-    """Crée des territoires équilibrés à partir des colonnes sélectionnées"""
+    """Crée des territoires équilibrés avec un ajustement des écarts"""
     # Créer une copie de travail du DataFrame
     working_df = df.copy()
 
@@ -68,6 +87,9 @@ def create_territories(
 
     # Répartir les données en territoires
     territories = [working_df.iloc[i::num_territories] for i in range(num_territories)]
+
+    # Rééquilibrage pour minimiser les écarts
+    territories = balance_territories(territories, balance_columns)
 
     # Calcul des métriques pour chaque territoire
     metrics = []
