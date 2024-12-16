@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import base64
 import chardet
-from typing import List, Optional, Union
+from typing import List, Optional
 
 def load_data(file) -> Optional[pd.DataFrame]:
     try:
@@ -30,6 +30,7 @@ def load_data(file) -> Optional[pd.DataFrame]:
 
 def normalize_numeric_column(series: pd.Series) -> pd.Series:
     try:
+        # Remove currency symbols and commas, then convert to numeric
         return pd.to_numeric(
             series.astype(str).str.replace(r'[€$£,]', '', regex=True).str.replace(',', '.'),
             errors='coerce'
@@ -43,7 +44,7 @@ def create_territories(
     balance_columns: List[str],
     weights: Optional[List[float]] = None
 ) -> tuple[List[pd.DataFrame], pd.DataFrame]:
-    # Create working copy
+    # Create working copy of the dataframe
     working_df = df.copy()
     
     # Normalize columns
@@ -54,16 +55,17 @@ def create_territories(
     if weights is None:
         weights = [1/len(balance_columns)] * len(balance_columns)
     
+    # Ensure weights sum to 1
     working_df['score'] = sum(
         working_df[col] * weight 
         for col, weight in zip(balance_columns, weights)
     )
     
-    # Sort and distribute
+    # Sort and distribute data into territories
     working_df = working_df.sort_values('score', ascending=False)
     territories = [working_df.iloc[i::num_territories] for i in range(num_territories)]
     
-    # Calculate metrics
+    # Calculate and return metrics for each territory
     metrics = []
     for i, territory in enumerate(territories):
         metric = {'Territory': i + 1, 'Count': len(territory)}
@@ -89,13 +91,17 @@ def main():
             st.write("Data Preview:", df.head())
             st.write("Available columns:", df.columns.tolist())  # Added to debug column names
 
+            # Select only numeric columns
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            
+            # Allow user to select balance columns
             balance_columns = st.multiselect(
                 "Select columns to balance",
                 options=numeric_cols,
                 default=numeric_cols[:1]
             )
 
+            # Layout for number of territories and weight option
             col1, col2 = st.columns(2)
             with col1:
                 num_territories = st.number_input(
@@ -108,6 +114,7 @@ def main():
             with col2:
                 use_weights = st.checkbox("Use custom weights", value=False)
 
+            # Handle custom weights
             weights = None
             if use_weights and balance_columns:
                 weights = []
@@ -119,15 +126,17 @@ def main():
                     )
                     weights.append(weight)
                 
-                # Normalize weights
+                # Normalize weights to ensure they sum up to 1
                 total = sum(weights)
-                weights = [w/total for w in weights]
+                weights = [w / total for w in weights]
 
+            # Button to trigger territory creation
             if st.button("Create Territories"):
                 if not balance_columns:
                     st.error("Please select at least one column to balance")
                     return
 
+                # Call function to create territories
                 territories, metrics = create_territories(
                     df, 
                     num_territories, 
@@ -135,11 +144,13 @@ def main():
                     weights
                 )
 
+                # Display metrics
                 st.subheader("Territory Metrics")
                 st.write(metrics)
 
+                # Display territories with download links
                 for i, territory in enumerate(territories):
-                    with st.expander(f"Territory {i+1} ({len(territory)} accounts)"):
+                    with st.expander(f"Territory {i+1} ({len(territory)} accounts)") :
                         st.write(territory)
                         st.markdown(
                             get_download_link(territory, f"territory_{i+1}.csv"),
