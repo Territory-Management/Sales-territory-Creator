@@ -40,29 +40,22 @@ def prepare_data(df: pd.DataFrame, balance_columns: List[str]) -> Tuple[pd.DataF
             
     return active_clients, termination_clients
 
-def calculate_territory_scores(
-    df: pd.DataFrame,
-    balance_columns: List[str],
-    weights: Optional[List[float]] = None
-) -> pd.DataFrame:
-    """Calculate scores for distribution efficiently."""
-    if weights is None:
-        weights = [1.0 / len(balance_columns)] * len(balance_columns)
-    
-    df['score'] = df[balance_columns].fillna(0).dot(weights)
-    return df.sort_values('score', ascending=False)
+def calculate_scores(df: pd.DataFrame, balance_columns: List[str], weights: Optional[List[float]]) -> pd.Series:
+    """Calculate scores using vectorized operations."""
+    weighted_sums = df[balance_columns].fillna(0).values @ np.array(weights)
+    return pd.Series(weighted_sums, index=df.index)
 
 def distribute_territories(df: pd.DataFrame, num_territories: int) -> List[pd.DataFrame]:
     """Distribute clients into territories ensuring equity."""
-    territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
+    territories = [[] for _ in range(num_territories)]
     territory_sums = np.zeros(num_territories)
 
     for _, client in df.iterrows():
         min_sum_idx = np.argmin(territory_sums)
-        territories[min_sum_idx] = pd.concat([territories[min_sum_idx], pd.DataFrame([client])], ignore_index=True)
+        territories[min_sum_idx].append(client)
         territory_sums[min_sum_idx] += client['score']
 
-    return territories
+    return [pd.DataFrame(territory) for territory in territories]
 
 def calculate_metrics(territories: List[pd.DataFrame], balance_columns: List[str]) -> pd.DataFrame:
     """Calculate territory metrics."""
@@ -92,8 +85,11 @@ def create_balanced_territories(
     active_clients, termination_clients = prepare_data(df, balance_columns)
 
     # Calculate scores for both active and terminated clients
-    active_clients = calculate_territory_scores(active_clients, balance_columns, weights)
-    termination_clients = calculate_territory_scores(termination_clients, balance_columns, weights)
+    if weights is None:
+        weights = [1.0 / len(balance_columns)] * len(balance_columns)
+    
+    active_clients['score'] = calculate_scores(active_clients, balance_columns, weights)
+    termination_clients['score'] = calculate_scores(termination_clients, balance_columns, weights)
 
     # Distribute all clients
     all_clients = pd.concat([active_clients, termination_clients]).sort_values('score', ascending=False)
