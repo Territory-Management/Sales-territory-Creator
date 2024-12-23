@@ -2,14 +2,15 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import base64
-from typing import List, Optional
+from typing import List
 
 def load_data(file) -> pd.DataFrame:
-    """Load the CSV file."""
+    """Load the CSV file with robust parsing options."""
     try:
         raw_data = file.read()
         file.seek(0)
-        return pd.read_csv(file)
+        # Attempt to parse with default settings
+        return pd.read_csv(file, sep=',', error_bad_lines=False, warn_bad_lines=True)
     except Exception as e:
         st.error(f"Error loading the file: {str(e)}")
         return pd.DataFrame()
