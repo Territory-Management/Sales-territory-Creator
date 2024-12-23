@@ -7,7 +7,7 @@ from typing import List, Optional, Tuple
 from datetime import datetime
 
 def load_data(file) -> Optional[pd.DataFrame]:
-    """Charge le fichier CSV en détectant l'encodage"""
+    """Load the CSV file while detecting the encoding."""
     try:
         raw_data = file.read()
         file.seek(0)
@@ -15,11 +15,11 @@ def load_data(file) -> Optional[pd.DataFrame]:
         df = pd.read_csv(file, encoding=encoding, engine='python', sep=None)
         return df
     except Exception as e:
-        st.error(f"Erreur lors du chargement du fichier : {str(e)}")
+        st.error(f"Error loading the file: {str(e)}")
         return None
 
 def normalize_numeric_column(series: pd.Series) -> pd.Series:
-    """Normalise les colonnes numériques"""
+    """Normalize numeric columns."""
     return pd.to_numeric(
         series.astype(str)
         .str.replace(r'[\u20ac$\u00a3,]', '', regex=True)
@@ -29,7 +29,7 @@ def normalize_numeric_column(series: pd.Series) -> pd.Series:
     )
 
 def prepare_data(df: pd.DataFrame, balance_columns: List[str]) -> Tuple[pd.DataFrame, pd.DataFrame]:
-    """Prépare les données en séparant clients actifs et résiliés"""
+    """Prepare data by separating active and terminated clients."""
     df['Dt resiliation contrat all'] = pd.to_datetime(df['Dt resiliation contrat all'], errors='coerce')
     termination_clients = df[df['Dt resiliation contrat all'].notna()].copy()
     active_clients = df[df['Dt resiliation contrat all'].isna()].copy()
@@ -46,7 +46,7 @@ def calculate_territory_scores(
     balance_columns: List[str],
     weights: Optional[List[float]] = None
 ) -> pd.DataFrame:
-    """Calcule les scores pour la répartition"""
+    """Calculate scores for distribution."""
     if weights is None:
         weights = [1.0 / len(balance_columns)] * len(balance_columns)
         
@@ -56,11 +56,11 @@ def calculate_territory_scores(
     return df.sort_values('score', ascending=False)
 
 def distribute_territories(df: pd.DataFrame, num_territories: int) -> List[pd.DataFrame]:
-    """Distribue les clients en territoires"""
+    """Distribute clients into territories."""
     return [df.iloc[i::num_territories].copy() for i in range(num_territories)]
 
 def distribute_terminations(territories: List[pd.DataFrame], termination_clients: pd.DataFrame) -> List[pd.DataFrame]:
-    """Distribue les clients avec résiliation"""
+    """Distribute terminated clients."""
     termination_clients = termination_clients.sort_values('Dt resiliation contrat all')
     
     for i, client in enumerate(termination_clients.itertuples(index=False)):
@@ -73,7 +73,7 @@ def distribute_terminations(territories: List[pd.DataFrame], termination_clients
     return territories
 
 def calculate_metrics(territories: List[pd.DataFrame], balance_columns: List[str]) -> pd.DataFrame:
-    """Calcule les métriques des territoires"""
+    """Calculate territory metrics."""
     metrics = []
     for i, territory in enumerate(territories):
         metric = {
@@ -95,38 +95,70 @@ def create_balanced_territories(
     num_territories: int,
     balance_columns: List[str],
     weights: Optional[List[float]] = None
-) -> Tuple[List[pd.DataFrame], pd.DataFrame]:
-    """Crée les territoires équilibrés"""
-    active_clients, termination_clients = prepare_data(df, balance_columns)
-    scored_actives = calculate_territory_scores(active_clients, balance_columns, weights)
-    territories = distribute_territories(scored_actives, num_territories)
-    
-    if not termination_clients.empty:
-        territories = distribute_terminations(territories, termination_clients)
-    
+) -> Tuple[List[pd.DataFrame], pd.DataFrame, pd.DataFrame]:
+    """Create balanced territories with optimized distribution."""
+    df['Dt resiliation contrat all'] = pd.to_datetime(df['Dt resiliation contrat all'], errors='coerce')
+    active_clients = df[df['Dt resiliation contrat all'].isna()].copy()
+    termination_clients = df[df['Dt resiliation contrat all'].notna()].copy()
+
+    score_columns = [col for col in balance_columns if col != 'Dt resiliation contrat all']
+    if weights is None:
+        weights = [1.0 / len(score_columns)] * len(score_columns)
+
+    for col in score_columns:
+        active_clients[col] = normalize_numeric_column(active_clients[col])
+        termination_clients[col] = normalize_numeric_column(termination_clients[col])
+
+    active_clients['score'] = sum(active_clients[col] * weight 
+                                  for col, weight in zip(score_columns, weights))
+    termination_clients['score'] = sum(termination_clients[col] * weight 
+                                       for col, weight in zip(score_columns, weights))
+
+    territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
+    territory_sums = [0] * num_territories
+
+    sorted_terminations = termination_clients.sort_values('score', ascending=False)
+    for _, client in sorted_terminations.iterrows():
+        min_sum_idx = territory_sums.index(min(territory_sums))
+        territories[min_sum_idx] = pd.concat([territories[min_sum_idx], 
+                                              pd.DataFrame([client])], 
+                                             ignore_index=True)
+        territory_sums[min_sum_idx] += client['score']
+
+    sorted_actives = active_clients.sort_values('score', ascending=False)
+    for _, client in sorted_actives.iterrows():
+        min_sum_idx = territory_sums.index(min(territory_sums))
+        territories[min_sum_idx] = pd.concat([territories[min_sum_idx], 
+                                              pd.DataFrame([client])], 
+                                             ignore_index=True)
+        territory_sums[min_sum_idx] += client['score']
+
     for i, territory in enumerate(territories):
         territory['Territory'] = i + 1
-    
+
     metrics = calculate_metrics(territories, balance_columns)
-    return territories, metrics
+    combined_territories = pd.concat(territories, ignore_index=True)
+    combined_territories['Territory'] = combined_territories['Territory'].astype(int)
+
+    return territories, metrics, combined_territories
 
 def get_download_link(df: pd.DataFrame, filename: str) -> str:
-    """Génère un lien de téléchargement"""
+    """Generate a download link."""
     csv = df.to_csv(index=False, encoding='utf-8-sig')
     b64 = base64.b64encode(csv.encode()).decode()
-    return f'<a href="data:file/csv;base64,{b64}" download="{filename}">Télécharger {filename}</a>'
+    return f'<a href="data:file/csv;base64,{b64}" download="{filename}">Download {filename}</a>'
 
 def display_territory_metrics(metrics: pd.DataFrame):
-    """Affiche les métriques avec Streamlit"""
-    st.subheader("📊 Métriques par territoire")
+    """Display territory metrics with Streamlit."""
+    st.subheader("📊 Territory Metrics")
     cols = st.columns(len(metrics))
     
     for i, (_, row) in enumerate(metrics.iterrows()):
         with cols[i]:
             st.metric(
-                f"Territoire {row['Territory']}", 
+                f"Territory {row['Territory']}", 
                 f"{row['Total_Clients']} clients",
-                f"{row['Resiliations']} résiliations"
+                f"{row['Resiliations']} resiliations"
             )
     
     st.dataframe(metrics, use_container_width=True)
@@ -135,9 +167,9 @@ def main():
     st.set_page_config(layout="wide")
     st.title('Territory Balancer')
 
-    uploaded_file = st.file_uploader("📂 Importer un fichier CSV", type="csv")
+    uploaded_file = st.file_uploader("📂 Upload a CSV file", type="csv")
     if not uploaded_file:
-        st.info("Importez votre fichier CSV pour commencer")
+        st.info("Upload your CSV file to get started")
         return
 
     df = load_data(uploaded_file)
@@ -150,39 +182,47 @@ def main():
     
     with col2:
         num_territories = st.number_input(
-            "Nombre de territoires", 
+            "Number of Territories", 
             min_value=2, 
             max_value=len(df), 
             value=4
         )
         
         balance_columns = st.multiselect(
-            "Colonnes à équilibrer",
+            "Columns to Balance",
             options=[c for c in df.columns if c != 'Dt resiliation contrat all'],
             default=df.select_dtypes(include=['float64', 'int64']).columns[:1].tolist()
         )
 
-        use_weights = st.checkbox("Utiliser des poids")
+        use_weights = st.checkbox("Use Weights")
         weights = None
         if use_weights:
             weights = [
-                st.number_input(f"Poids pour {col}", value=1.0, min_value=0.0)
+                st.number_input(f"Weight for {col}", value=1.0, min_value=0.0)
                 for col in balance_columns
             ]
             total = sum(weights)
             weights = [w / total for w in weights]
 
-    if st.button("🚀 Générer les territoires", type="primary"):
-        territories, metrics = create_balanced_territories(
+    if st.button("🚀 Generate Territories", type="primary"):
+        territories, metrics, combined_territories = create_balanced_territories(
             df, num_territories, balance_columns, weights
         )
         
         display_territory_metrics(metrics)
         
-        st.subheader("📥 Téléchargement")
+        st.subheader("📥 Download")
+        # Global download
+        st.markdown(
+            get_download_link(combined_territories, "all_territories.csv"),
+            unsafe_allow_html=True
+        )
+        
+        # Individual downloads
+        st.subheader("Download by Territory")
         for i, territory in enumerate(territories, 1):
             st.markdown(
-                get_download_link(territory, f"territoire_{i}.csv"),
+                get_download_link(territory, f"territory_{i}.csv"),
                 unsafe_allow_html=True
             )
 
