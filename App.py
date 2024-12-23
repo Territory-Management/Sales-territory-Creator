@@ -9,8 +9,10 @@ def load_data(file) -> pd.DataFrame:
     try:
         raw_data = file.read()
         file.seek(0)
-        # Attempt to parse with default settings
-        return pd.read_csv(file, sep=',', error_bad_lines=False, warn_bad_lines=True)
+        return pd.read_csv(file, sep=',')
+    except pd.errors.ParserError as e:
+        st.error(f"Parser error loading the file: {str(e)}")
+        return pd.DataFrame()
     except Exception as e:
         st.error(f"Error loading the file: {str(e)}")
         return pd.DataFrame()
