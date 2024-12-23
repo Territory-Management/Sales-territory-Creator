@@ -1,7 +1,8 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sklearn.preprocessing import StandardScaler
+import base64
+from typing import List, Optional
 
 def load_data(file) -> pd.DataFrame:
     """Load the CSV file."""
@@ -14,9 +15,11 @@ def load_data(file) -> pd.DataFrame:
         return pd.DataFrame()
 
 def normalize_data(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
-    """Normalize specified columns in the DataFrame."""
-    scaler = StandardScaler()
-    df[columns] = scaler.fit_transform(df[columns])
+    """Normalize specified columns in the DataFrame using min-max scaling."""
+    for col in columns:
+        min_col = df[col].min()
+        max_col = df[col].max()
+        df[col] = (df[col] - min_col) / (max_col - min_col)
     return df
 
 def calculate_scores(df: pd.DataFrame, balance_columns: List[str]) -> pd.Series:
@@ -54,6 +57,17 @@ def calculate_metrics(territories: List[pd.DataFrame], balance_columns: List[str
     
     return pd.DataFrame(metrics)
 
+def get_download_link(df: pd.DataFrame, filename: str) -> str:
+    """Generate a download link for a DataFrame."""
+    csv = df.to_csv(index=False, encoding='utf-8-sig')
+    b64 = base64.b64encode(csv.encode()).decode()
+    return f'<a href="data:file/csv;base64,{b64}" download="{filename}">Download {filename}</a>'
+
+def display_territory_metrics(metrics: pd.DataFrame):
+    """Display territory metrics with Streamlit."""
+    st.subheader("📊 Territory Metrics")
+    st.dataframe(metrics, use_container_width=True)
+
 def main():
     st.set_page_config(layout="wide")
     st.title('Territory Balancer')
@@ -88,16 +102,12 @@ def main():
         territories = distribute_territories(df, num_territories)
         metrics = calculate_metrics(territories, balance_columns)
 
-        st.subheader("📊 Territory Metrics")
-        st.dataframe(metrics, use_container_width=True)
+        display_territory_metrics(metrics)
 
-        # Download links
         st.subheader("📥 Download")
         combined = pd.concat(territories, ignore_index=True)
         combined['Territory'] = combined['Territory'].astype(int)
-        csv = combined.to_csv(index=False, encoding='utf-8-sig')
-        b64 = base64.b64encode(csv.encode()).decode()
-        st.markdown(f'<a href="data:file/csv;base64,{b64}" download="all_territories.csv">Download All Territories</a>', unsafe_allow_html=True)
+        st.markdown(get_download_link(combined, "all_territories.csv"), unsafe_allow_html=True)
 
 if __name__ == "__main__":
     main()
