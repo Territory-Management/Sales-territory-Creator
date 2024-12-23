@@ -4,7 +4,6 @@ import numpy as np
 import base64
 import chardet
 from typing import List, Optional, Tuple
-from datetime import datetime
 
 def load_data(file) -> Optional[pd.DataFrame]:
     """Load the CSV file while detecting the encoding."""
@@ -46,30 +45,23 @@ def calculate_territory_scores(
     balance_columns: List[str],
     weights: Optional[List[float]] = None
 ) -> pd.DataFrame:
-    """Calculate scores for distribution."""
+    """Calculate scores for distribution efficiently."""
     if weights is None:
         weights = [1.0 / len(balance_columns)] * len(balance_columns)
-        
-    df = df.copy()
-    score_columns = [col for col in balance_columns if col != 'Dt resiliation contrat all']
-    df['score'] = sum(df[col] * weight for col, weight in zip(score_columns, weights))
+    
+    df['score'] = df[balance_columns].fillna(0).dot(weights)
     return df.sort_values('score', ascending=False)
 
 def distribute_territories(df: pd.DataFrame, num_territories: int) -> List[pd.DataFrame]:
-    """Distribute clients into territories."""
-    return [df.iloc[i::num_territories].copy() for i in range(num_territories)]
+    """Distribute clients into territories ensuring equity."""
+    territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
+    territory_sums = np.zeros(num_territories)
 
-def distribute_terminations(territories: List[pd.DataFrame], termination_clients: pd.DataFrame) -> List[pd.DataFrame]:
-    """Distribute terminated clients."""
-    termination_clients = termination_clients.sort_values('Dt resiliation contrat all')
-    
-    for i, client in enumerate(termination_clients.itertuples(index=False)):
-        territory_idx = i % len(territories)
-        territories[territory_idx] = pd.concat(
-            [territories[territory_idx], pd.DataFrame([client._asdict()])],
-            ignore_index=True
-        )
-    
+    for _, client in df.iterrows():
+        min_sum_idx = np.argmin(territory_sums)
+        territories[min_sum_idx] = pd.concat([territories[min_sum_idx], pd.DataFrame([client])], ignore_index=True)
+        territory_sums[min_sum_idx] += client['score']
+
     return territories
 
 def calculate_metrics(territories: List[pd.DataFrame], balance_columns: List[str]) -> pd.DataFrame:
@@ -85,7 +77,7 @@ def calculate_metrics(territories: List[pd.DataFrame], balance_columns: List[str
         for col in balance_columns:
             if col != 'Dt resiliation contrat all':
                 metric[f'{col}_Total'] = territory[col].sum()
-                metric[f'{col}_Moyenne'] = territory[col].mean()
+                metric[f'{col}_Average'] = territory[col].mean()
         metrics.append(metric)
     
     return pd.DataFrame(metrics)
@@ -97,42 +89,16 @@ def create_balanced_territories(
     weights: Optional[List[float]] = None
 ) -> Tuple[List[pd.DataFrame], pd.DataFrame, pd.DataFrame]:
     """Create balanced territories with optimized distribution."""
-    df['Dt resiliation contrat all'] = pd.to_datetime(df['Dt resiliation contrat all'], errors='coerce')
-    active_clients = df[df['Dt resiliation contrat all'].isna()].copy()
-    termination_clients = df[df['Dt resiliation contrat all'].notna()].copy()
+    active_clients, termination_clients = prepare_data(df, balance_columns)
 
-    score_columns = [col for col in balance_columns if col != 'Dt resiliation contrat all']
-    if weights is None:
-        weights = [1.0 / len(score_columns)] * len(score_columns)
+    # Calculate scores for both active and terminated clients
+    active_clients = calculate_territory_scores(active_clients, balance_columns, weights)
+    termination_clients = calculate_territory_scores(termination_clients, balance_columns, weights)
 
-    for col in score_columns:
-        active_clients[col] = normalize_numeric_column(active_clients[col])
-        termination_clients[col] = normalize_numeric_column(termination_clients[col])
-
-    active_clients['score'] = sum(active_clients[col] * weight 
-                                  for col, weight in zip(score_columns, weights))
-    termination_clients['score'] = sum(termination_clients[col] * weight 
-                                       for col, weight in zip(score_columns, weights))
-
-    territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
-    territory_sums = [0] * num_territories
-
-    sorted_terminations = termination_clients.sort_values('score', ascending=False)
-    for _, client in sorted_terminations.iterrows():
-        min_sum_idx = territory_sums.index(min(territory_sums))
-        territories[min_sum_idx] = pd.concat([territories[min_sum_idx], 
-                                              pd.DataFrame([client])], 
-                                             ignore_index=True)
-        territory_sums[min_sum_idx] += client['score']
-
-    sorted_actives = active_clients.sort_values('score', ascending=False)
-    for _, client in sorted_actives.iterrows():
-        min_sum_idx = territory_sums.index(min(territory_sums))
-        territories[min_sum_idx] = pd.concat([territories[min_sum_idx], 
-                                              pd.DataFrame([client])], 
-                                             ignore_index=True)
-        territory_sums[min_sum_idx] += client['score']
-
+    # Distribute all clients
+    all_clients = pd.concat([active_clients, termination_clients]).sort_values('score', ascending=False)
+    territories = distribute_territories(all_clients, num_territories)
+    
     for i, territory in enumerate(territories):
         territory['Territory'] = i + 1
 
