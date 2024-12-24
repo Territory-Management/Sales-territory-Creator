@@ -30,7 +30,6 @@ class TerritoryOptimizer:
         # Handle active/inactive clients
         if date_resiliation and date_resiliation in processed_df.columns:
             try:
-                # Convert to datetime if not already
                 processed_df[date_resiliation] = pd.to_datetime(processed_df[date_resiliation], errors='coerce')
                 processed_df['is_active'] = processed_df[date_resiliation].isna()
             except Exception as e:
@@ -131,18 +130,20 @@ def main():
             df = pd.read_csv(uploaded_file, on_bad_lines='warn', engine='python')
             st.info(f"Loaded {df.shape[0]} rows and {df.shape[1]} columns")
             
-            # Column selection
+            # Ensure that numeric columns are detected correctly
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-            object_cols = df.select_dtypes(include=['object']).columns.tolist()
+            # Let's include columns that might be numbers stored as strings
+            potential_numeric_cols = df.columns[df.dtypes == 'object'].tolist()
             
+            # Allow user to select numeric columns, including those that can be converted
             balance_columns = st.multiselect(
                 "Select Columns for Balancing",
-                options=numeric_cols
+                options=numeric_cols + potential_numeric_cols
             )
             
             date_resiliation = st.selectbox(
                 "Select Date Résiliation Column (Optional)",
-                options=['None'] + object_cols,
+                options=['None'] + df.columns.tolist(),
                 help="Column containing cancellation dates"
             )
             
