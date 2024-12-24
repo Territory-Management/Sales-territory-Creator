@@ -7,19 +7,19 @@ from io import StringIO
 from typing import List
 
 def load_data(file) -> pd.DataFrame:
-    """Load and clean the CSV file before parsing."""
+    """Load and clean the CSV file to handle parsing errors."""
     try:
         raw_data = file.read().decode('utf-8')
         file.seek(0)
         
-        # Use csv.reader to handle malformed lines manually
+        # Use csv.reader to manually filter out malformed lines
         reader = csv.reader(StringIO(raw_data), delimiter=',')
         cleaned_data = []
         expected_columns = None
         
         for i, row in enumerate(reader):
-            if expected_columns is None:
-                expected_columns = len(row)
+            if i == 0:
+                expected_columns = len(row)  # Determine the number of columns expected
             if len(row) == expected_columns:
                 cleaned_data.append(row)
             else:
@@ -31,7 +31,9 @@ def load_data(file) -> pd.DataFrame:
         writer.writerows(cleaned_data)
         cleaned_csv.seek(0)
         
-        return pd.read_csv(cleaned_csv)
+        # Load the DataFrame from the cleaned CSV string
+        df = pd.read_csv(cleaned_csv)
+        return df
     except Exception as e:
         st.error(f"Error loading the file: {str(e)}")
         return pd.DataFrame()
