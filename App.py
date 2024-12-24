@@ -2,17 +2,36 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import base64
+import csv
+from io import StringIO
 from typing import List
 
 def load_data(file) -> pd.DataFrame:
-    """Load the CSV file with robust parsing options."""
+    """Load and clean the CSV file before parsing."""
     try:
-        raw_data = file.read()
+        raw_data = file.read().decode('utf-8')
         file.seek(0)
-        return pd.read_csv(file, sep=',')
-    except pd.errors.ParserError as e:
-        st.error(f"Parser error loading the file: {str(e)}")
-        return pd.DataFrame()
+        
+        # Use csv.reader to handle malformed lines manually
+        reader = csv.reader(StringIO(raw_data), delimiter=',')
+        cleaned_data = []
+        expected_columns = None
+        
+        for i, row in enumerate(reader):
+            if expected_columns is None:
+                expected_columns = len(row)
+            if len(row) == expected_columns:
+                cleaned_data.append(row)
+            else:
+                st.warning(f"Skipping malformed line {i+1}: {row}")
+
+        # Convert cleaned data back to a CSV string
+        cleaned_csv = StringIO()
+        writer = csv.writer(cleaned_csv, delimiter=',')
+        writer.writerows(cleaned_data)
+        cleaned_csv.seek(0)
+        
+        return pd.read_csv(cleaned_csv)
     except Exception as e:
         st.error(f"Error loading the file: {str(e)}")
         return pd.DataFrame()
