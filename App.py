@@ -1,138 +1,144 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import csv
-from io import StringIO
-from typing import List
+from dataclasses import dataclass
+from typing import List, Dict, Tuple, Optional
+from sklearn.cluster import KMeans
+from pulp import *
+import logging
 
-def load_data(file) -> pd.DataFrame:
-    """Load the CSV file and handle rows with varying numbers of fields."""
-    try:
-        raw_data = file.read().decode('utf-8')
-        file.seek(0)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+@dataclass
+class TerritoryMetrics:
+    territory_id: int
+    clients: List[int]  # Client indices
+    metrics: Dict[str, float]  # Column sums
+
+class TerritoryOptimizer:
+    def __init__(self, df: pd.DataFrame):
+        self.df = df.copy()
+        self.num_territories = 2
+        self.balance_columns: List[str] = []
         
-        # Use csv.reader to read the file
-        reader = csv.reader(StringIO(raw_data))
-        rows = list(reader)
-        
-        # Determine the maximum number of columns
-        max_columns = max(len(row) for row in rows)
-        
-        # Standardize row lengths by expanding each row to the maximum number of columns
-        standardized_rows = [row + [None] * (max_columns - len(row)) for row in rows]
-        
-        # Create a DataFrame using the standardized rows
-        df = pd.DataFrame(standardized_rows[1:], columns=standardized_rows[0])
-        
-        # Convert all numerical columns to appropriate data types
-        df = df.apply(pd.to_numeric, errors='ignore')
-        
-        return df
-    except Exception as e:
-        st.error(f"Error loading the file: {str(e)}")
-        return pd.DataFrame()
-
-def normalize_data(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
-    """Normalize specified columns in the DataFrame using min-max scaling."""
-    for col in columns:
-        if pd.api.types.is_numeric_dtype(df[col]):
-            min_col = df[col].min()
-            max_col = df[col].max()
-            df[col] = (df[col] - min_col) / (max_col - min_col)
-        else:
-            st.warning(f"Column '{col}' is not numeric and will be ignored in normalization.")
-    return df
-
-def calculate_scores(df: pd.DataFrame, balance_columns: List[str]) -> pd.Series:
-    """Calculate scores using equal weights for each column."""
-    weights = np.ones(len(balance_columns)) / len(balance_columns)
-    scores = df[balance_columns].fillna(0).dot(weights)
-    return scores
-
-def distribute_territories(df: pd.DataFrame, num_territories: int) -> List[pd.DataFrame]:
-    """Distribute clients into territories ensuring equity."""
-    territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
-    territory_totals = np.zeros(num_territories)
-
-    # Sort by score to distribute high-value clients first
-    df = df.sort_values('score', ascending=False)
-
-    for _, client in df.iterrows():
-        min_idx = np.argmin(territory_totals)
-        territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([client])], ignore_index=True)
-        territory_totals[min_idx] += client['score']
-
-    return territories
-
-def calculate_metrics(territories: List[pd.DataFrame], balance_columns: List[str]) -> pd.DataFrame:
-    """Calculate metrics for each territory."""
-    metrics = []
-    for i, territory in enumerate(territories):
-        metric = {
-            'Territory': i + 1,
-            'Total Clients': len(territory),
-            'Resiliations': territory['Dt resiliation contrat all'].notna().sum() if 'Dt resiliation contrat all' in territory else 0
-        }
+    def preprocess_data(self, balance_columns: List[str]) -> pd.DataFrame:
+        """Clean and prepare data for optimization."""
+        processed_df = self.df.copy()
         
         for col in balance_columns:
-            if col in territory:
-                metric[f'{col} Total'] = territory[col].sum()
-                metric[f'{col} Average'] = territory[col].mean()
-        metrics.append(metric)
-    
-    return pd.DataFrame(metrics)
-
-def get_download_link(df: pd.DataFrame, filename: str) -> str:
-    """Generate a download link for a DataFrame."""
-    csv = df.to_csv(index=False, encoding='utf-8-sig')
-    b64 = base64.b64encode(csv.encode()).decode()
-    return f'<a href="data:file/csv;base64,{b64}" download="{filename}">Download {filename}</a>'
-
-def display_territory_metrics(metrics: pd.DataFrame):
-    """Display territory metrics with Streamlit."""
-    st.subheader("📊 Territory Metrics")
-    st.dataframe(metrics, use_container_width=True)
+            processed_df[col] = pd.to_numeric(
+                processed_df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True),
+                errors='coerce'
+            )
+            
+        processed_df.dropna(subset=balance_columns, inplace=True)
+        return processed_df
+        
+    def optimize_territories(self, balance_columns: List[str]) -> List[TerritoryMetrics]:
+        """Create balanced territories using linear programming."""
+        processed_df = self.preprocess_data(balance_columns)
+        n_clients = len(processed_df)
+        target_size = n_clients // self.num_territories
+        
+        # Initialize optimization problem
+        prob = LpProblem("Territory_Balancing", LpMinimize)
+        
+        # Decision variables: x[i,j] = 1 if client i is in territory j
+        x = LpVariable.dicts("client_assignment",
+                           ((i, j) for i in range(n_clients) 
+                            for j in range(self.num_territories)),
+                           cat='Binary')
+        
+        # Objective: Minimize variance between territories
+        territory_sums = {}
+        for col in balance_columns:
+            values = processed_df[col].values
+            for j in range(self.num_territories):
+                territory_sums[(col,j)] = lpSum(values[i] * x[i,j] 
+                                              for i in range(n_clients))
+        
+        # Target values
+        targets = {col: processed_df[col].sum() / self.num_territories 
+                  for col in balance_columns}
+        
+        # Add objective function
+        prob += lpSum((territory_sums[(col,j)] - targets[col])**2 
+                     for col in balance_columns 
+                     for j in range(self.num_territories))
+        
+        # Constraints
+        # Each client must be assigned to exactly one territory
+        for i in range(n_clients):
+            prob += lpSum(x[i,j] for j in range(self.num_territories)) == 1
+            
+        # Each territory should have approximately equal size
+        for j in range(self.num_territories):
+            prob += lpSum(x[i,j] for i in range(n_clients)) >= target_size - 1
+            prob += lpSum(x[i,j] for i in range(n_clients)) <= target_size + 1
+        
+        # Solve the optimization problem
+        prob.solve(PULP_CBC_CMD(msg=False))
+        
+        # Extract results
+        territories = []
+        for j in range(self.num_territories):
+            clients = [i for i in range(n_clients) 
+                      if value(x[i,j]) > 0.5]
+            
+            metrics = {col: processed_df.iloc[clients][col].sum() 
+                      for col in balance_columns}
+            
+            territories.append(TerritoryMetrics(
+                territory_id=j+1,
+                clients=clients,
+                metrics=metrics
+            ))
+        
+        return territories
 
 def main():
-    st.set_page_config(layout="wide")
-    st.title('Territory Balancer')
-
-    uploaded_file = st.file_uploader("📂 Upload a CSV file", type="csv")
-    if not uploaded_file:
-        st.info("Upload your CSV file to get started")
-        return
-
-    df = load_data(uploaded_file)
-    if df.empty:
-        return
-
-    balance_columns = st.multiselect(
-        "Columns to Balance",
-        options=[c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])],
-        default=df.select_dtypes(include=[np.number]).columns.tolist()
-    )
-
-    num_territories = st.number_input(
-        "Number of Territories", 
-        min_value=2, 
-        max_value=min(len(df), 100), 
-        value=4
-    )
-
-    # Normalize and calculate scores
-    df = normalize_data(df, balance_columns)
-    df['score'] = calculate_scores(df, balance_columns)
-
-    if st.button("🚀 Generate Territories"):
-        territories = distribute_territories(df, num_territories)
-        metrics = calculate_metrics(territories, balance_columns)
-
-        display_territory_metrics(metrics)
-
-        st.subheader("📥 Download")
-        combined = pd.concat(territories, ignore_index=True)
-        combined['Territory'] = combined['Territory'].astype(int)
-        st.markdown(get_download_link(combined, "all_territories.csv"), unsafe_allow_html=True)
+    st.set_page_config(page_title="Territory Optimizer", layout="wide")
+    st.title('Territory Optimizer')
+    
+    uploaded_file = st.file_uploader("Upload CSV File", type=['csv'])
+    
+    if uploaded_file:
+        try:
+            df = pd.read_csv(uploaded_file)
+            
+            numeric_cols = df.select_dtypes(include=[np.number]).columns
+            balance_columns = st.multiselect(
+                "Select Columns for Balancing",
+                options=numeric_cols
+            )
+            
+            num_territories = st.slider("Number of Territories", 2, 10, 2)
+            
+            if st.button("Optimize Territories"):
+                optimizer = TerritoryOptimizer(df)
+                optimizer.num_territories = num_territories
+                
+                territories = optimizer.optimize_territories(balance_columns)
+                
+                for territory in territories:
+                    with st.expander(f"Territory {territory.territory_id}"):
+                        territory_df = df.iloc[territory.clients]
+                        st.write(f"Clients: {len(territory.clients)}")
+                        for col, value in territory.metrics.items():
+                            st.write(f"{col}: {value:,.2f}")
+                        st.dataframe(territory_df)
+                        
+                        csv = territory_df.to_csv(index=False)
+                        st.download_button(
+                            f"Download Territory {territory.territory_id}",
+                            data=csv,
+                            file_name=f'territory_{territory.territory_id}.csv',
+                            mime='text/csv'
+                        )
+                        
+        except Exception as e:
+            st.error(f"Error: {str(e)}")
 
 if __name__ == "__main__":
     main()
