@@ -29,10 +29,17 @@ class TerritoryOptimizer:
         
         # Handle active/inactive clients
         if date_resiliation and date_resiliation in processed_df.columns:
-            processed_df['is_active'] = processed_df[date_resiliation].isna()
+            try:
+                # Convert to datetime if not already
+                processed_df[date_resiliation] = pd.to_datetime(processed_df[date_resiliation], errors='coerce')
+                processed_df['is_active'] = processed_df[date_resiliation].isna()
+            except Exception as e:
+                logger.error(f"Error converting {date_resiliation} to datetime: {e}")
+                st.error(f"Could not process the date column: {e}")
+                processed_df['is_active'] = True
         else:
             processed_df['is_active'] = True
-            
+        
         # Clean numeric columns
         for col in balance_columns:
             processed_df[col] = pd.to_numeric(
@@ -126,7 +133,7 @@ def main():
             
             # Column selection
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-            date_cols = df.select_dtypes(include=['object']).columns.tolist()
+            object_cols = df.select_dtypes(include=['object']).columns.tolist()
             
             balance_columns = st.multiselect(
                 "Select Columns for Balancing",
@@ -135,7 +142,7 @@ def main():
             
             date_resiliation = st.selectbox(
                 "Select Date Résiliation Column (Optional)",
-                options=['None'] + date_cols,
+                options=['None'] + object_cols,
                 help="Column containing cancellation dates"
             )
             
