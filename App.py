@@ -1,214 +1,163 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from dataclasses import dataclass
-from typing import List, Dict
-from pulp import LpProblem, LpMinimize, LpVariable, lpSum, value
+import base64
 import logging
+from typing import List, Optional
 
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-@dataclass
-class TerritoryMetrics:
-    territory_id: int
-    clients: List[int]
-    metrics: Dict[str, float]
-    active_clients: int
-    inactive_clients: int
+def load_data(file) -> Optional[pd.DataFrame]:
+    """Charge le fichier CSV avec gestion des erreurs d'encodage."""
+    try:
+        df = pd.read_csv(file, encoding='utf-8', engine='python', sep=None)
+        logging.info("Fichier chargé avec succès avec l'encodage utf-8.")
+        return df
+    except UnicodeDecodeError:
+        try:
+            file.seek(0)
+            df = pd.read_csv(file, encoding='latin1', engine='python', sep=None)
+            logging.info("Fichier chargé avec succès avec l'encodage latin1.")
+            return df
+        except Exception as e:
+            logging.error(f"Erreur lors du chargement du fichier : {str(e)}")
+            st.error("Erreur lors du chargement du fichier. Veuillez vérifier le format.")
+            return None
+    except Exception as e:
+        logging.error(f"Erreur lors du chargement du fichier : {str(e)}")
+        st.error("Erreur lors du chargement du fichier. Veuillez vérifier le format.")
+        return None
 
-class TerritoryOptimizer:
-    def __init__(self, df: pd.DataFrame):
-        self.df = df.copy()
-        self.num_territories = 2
-        self.balance_columns: List[str] = []
+def normalize_numeric_column(series: pd.Series) -> pd.Series:
+    """Normalise les colonnes avec des symboles monétaires et des caractères non numériques."""
+    return pd.to_numeric(
+        series.astype(str).str.replace(r'[\u20ac$\u00a3,]', '', regex=True).str.replace(',', '.').str.strip(),
+        errors='coerce'
+    )
 
-    def preprocess_data(self, balance_columns: List[str], date_resiliation: str = None) -> pd.DataFrame:
-        """Clean data and identify active/inactive clients."""
-        processed_df = self.df.copy()
-
-        # Handle active/inactive clients
-        if date_resiliation and date_resiliation in processed_df.columns:
-            processed_df['is_active'] = pd.to_datetime(processed_df[date_resiliation], errors='coerce').isna()
-        else:
-            processed_df['is_active'] = True
-
-        # Ensure numeric columns
-        valid_columns = []
-        for col in balance_columns:
-            try:
-                processed_df[col] = pd.to_numeric(processed_df[col].str.replace(r'[^\d.-]', '', regex=True), errors='coerce')
-                if processed_df[col].notnull().all():
-                    valid_columns.append(col)
-            except Exception as e:
-                logger.warning(f"Skipping column {col}: {e}")
-
-        if not valid_columns:
-            st.error("No valid numeric columns were selected for balancing.")
-            return pd.DataFrame(), valid_columns
-        
-        processed_df.dropna(subset=valid_columns, inplace=True)
-        return processed_df, valid_columns
+def distribute_termination_clients(df: pd.DataFrame, termination_clients: pd.DataFrame, num_territories: int) -> List[pd.DataFrame]:
+    """Ventile les clients avec une date de résiliation équitablement parmi les territoires."""
+    territories = [df.iloc[i::num_territories] for i in range(num_territories)]
+    logging.info(f"Distribution de {len(termination_clients)} clients résiliés.")
     
-    def optimize_territories(self, balance_columns: List[str], date_resiliation: str = None) -> List[TerritoryMetrics]:
-        """Create balanced territories considering active/inactive clients."""
-        processed_df, valid_columns = self.preprocess_data(balance_columns, date_resiliation)
-        if processed_df.empty:
-            return []
-        
-        n_clients = len(processed_df)
-        
-        # Initialize optimization problem
-        prob = LpProblem("Territory_Balancing", LpMinimize)
-        
-        # Decision variables
-        x = LpVariable.dicts("client_assignment",
-                           ((i, j) for i in range(n_clients) 
-                            for j in range(self.num_territories)),
-                           cat='Binary')
-        
-        # Calculate target values per territory
-        targets = {col: processed_df[col].sum() / self.num_territories 
-                  for col in valid_columns}
-        
-        # Territory sums for each metric
-        territory_sums = {}
-        for col in valid_columns:
-            values = processed_df[col].values
-            for j in range(self.num_territories):
-                territory_sums[(col,j)] = lpSum(values[i] * x[i,j] 
-                                              for i in range(n_clients))
-        
-        # Objective function: minimize total deviation from target
-        prob += lpSum(abs(territory_sums[(col,j)] - targets[col]) 
-                     for col in valid_columns 
-                     for j in range(self.num_territories))
-        
-        # Each client in exactly one territory
-        for i in range(n_clients):
-            prob += lpSum(x[i,j] for j in range(self.num_territories)) == 1
-            
-        # Balance active and inactive clients
-        active_clients = processed_df['is_active'].values
-        target_active = sum(active_clients) / self.num_territories
-        target_inactive = (n_clients - sum(active_clients)) / self.num_territories
-        
-        for j in range(self.num_territories):
-            # Active clients balance
-            prob += lpSum(active_clients[i] * x[i,j] for i in range(n_clients)) >= target_active - 1
-            prob += lpSum(active_clients[i] * x[i,j] for i in range(n_clients)) <= target_active + 1
-            
-            # Inactive clients balance
-            prob += lpSum((1-active_clients[i]) * x[i,j] for i in range(n_clients)) >= target_inactive - 1
-            prob += lpSum((1-active_clients[i]) * x[i,j] for i in range(n_clients)) <= target_inactive + 1
-        
-        # Solve
-        prob.solve(PULP_CBC_CMD(msg=False))
-        
-        # Extract results
-        territories = []
-        for j in range(self.num_territories):
-            clients = [i for i in range(n_clients) 
-                      if value(x[i,j]) > 0.5]
-            
-            territory_df = processed_df.iloc[clients]
-            
-            territories.append(TerritoryMetrics(
-                territory_id=j+1,
-                clients=clients,
-                metrics={col: territory_df[col].sum() for col in valid_columns},
-                active_clients=territory_df['is_active'].sum(),
-                inactive_clients=(~territory_df['is_active']).sum()
-            ))
-        
-        return territories
+    for i, client in enumerate(termination_clients.itertuples(index=False)):
+        territories[i % num_territories] = pd.concat([territories[i % num_territories], pd.DataFrame([client._asdict()])], ignore_index=True)
+    
+    return territories
+
+def create_territories(
+    df: pd.DataFrame,
+    num_territories: int,
+    balance_columns: List[str],
+    weights: Optional[List[float]] = None,
+    years: Optional[List[int]] = None
+) -> tuple[List[pd.DataFrame], pd.DataFrame]:
+    """Crée des territoires équilibrés avec un ajustement des écarts."""
+    working_df = df.copy()
+    termination_clients = pd.DataFrame()
+
+    if years:
+        working_df['Dt resiliation contrat all'] = pd.to_datetime(working_df['Dt resiliation contrat all'], errors='coerce')
+        termination_clients = working_df[working_df['Dt resiliation contrat all'].dt.year.isin(years)]
+        working_df = working_df[~working_df['Dt resiliation contrat all'].dt.year.isin(years)]
+
+    for col in balance_columns:
+        working_df[col] = normalize_numeric_column(working_df[col])
+
+    if weights is None:
+        weights = [1 / len(balance_columns)] * len(balance_columns)
+
+    working_df['score'] = sum(working_df[col] * weight for col, weight in zip(balance_columns, weights))
+    working_df = working_df.sort_values('score', ascending=False)
+    territories = [working_df.iloc[i::num_territories] for i in range(num_territories)]
+
+    if not termination_clients.empty:
+        territories = distribute_termination_clients(pd.concat(territories, ignore_index=True), termination_clients, num_territories)
+
+    for i, territory in enumerate(territories):
+        territory['Territory'] = i + 1
+
+    metrics = []
+    for i, territory in enumerate(territories):
+        metric = {'Territory': i + 1, 'Count': len(territory)}
+        for col in balance_columns:
+            metric[f'{col}_total'] = territory[col].sum()
+        metrics.append(metric)
+
+    return territories, pd.DataFrame(metrics)
+
+def get_download_link(df: pd.DataFrame, filename: str) -> str:
+    """Génère un lien de téléchargement CSV."""
+    csv = df.to_csv(index=False)
+    b64 = base64.b64encode(csv.encode()).decode()
+    return f'<a href="data:file/csv;base64,{b64}" download="{filename}">Télécharger {filename}</a>'
 
 def main():
-    st.set_page_config(page_title="Territory Optimizer", layout="wide")
-    st.title('Territory Optimizer')
-    
-    uploaded_file = st.file_uploader("Upload CSV File", type=['csv'])
-    
+    st.title('EquiTerritory')
+
+    uploaded_file = st.file_uploader("Téléchargez un fichier CSV", type="csv")
     if uploaded_file:
-        try:
-            df = pd.read_csv(uploaded_file, on_bad_lines='warn', engine='python')
-            st.info(f"Loaded {df.shape[0]} rows and {df.shape[1]} columns")
-            
-            # Detect numeric columns and potential numeric columns
-            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-            potential_numeric_cols = df.columns[df.dtypes == 'object'].tolist()
-            
-            # Allow user to select numeric columns, including those that can be converted
+        df = load_data(uploaded_file)
+
+        if df is not None:
+            st.write("Aperçu des données :", df.head())
+            st.write("Colonnes disponibles :", df.columns.tolist())
+
             balance_columns = st.multiselect(
-                "Select Columns for Balancing",
-                options=numeric_cols + potential_numeric_cols
+                "Sélectionner les colonnes à équilibrer",
+                options=df.columns.tolist(),
+                default=df.columns.tolist()[:1]
             )
-            
-            # Use a specific name for the date column
-            date_resiliation = "Dt resiliation contrat all"
-            
-            if date_resiliation not in df.columns:
-                st.error(f"The column '{date_resiliation}' does not exist in the data.")
+
+            if not balance_columns:
+                st.error("Veuillez sélectionner au moins une colonne à équilibrer")
                 return
-            
-            num_territories = st.number_input(
-                "Number of Territories",
-                min_value=2,
-                value=2,
-                help="Enter desired number of territories"
+
+            col1, col2 = st.columns(2)
+            with col1:
+                num_territories = st.number_input(
+                    "Nombre de territoires", min_value=2, max_value=len(df), value=2
+                )
+
+            with col2:
+                use_weights = st.checkbox("Utiliser des poids personnalisés", value=False)
+
+            years = st.multiselect(
+                "Sélectionner les années de résiliation",
+                options=[2024, 2025, 2026],
+                default=[2024]
             )
-            
-            if st.button("Optimize Territories"):
-                if not balance_columns:
-                    st.warning("Please select at least one column for balancing.")
-                else:
-                    optimizer = TerritoryOptimizer(df)
-                    optimizer.num_territories = int(num_territories)
-                    
-                    territories = optimizer.optimize_territories(
-                        balance_columns,
-                        date_resiliation
-                    )
-                    
-                    if territories:
-                        # Display results
-                        metrics_df = pd.DataFrame([
-                            {
-                                'Territory': t.territory_id,
-                                'Active Clients': t.active_clients,
-                                'Inactive Clients': t.inactive_clients,
-                                **{f'{col} Sum': t.metrics[col] for col in balance_columns}
-                            }
-                            for t in territories
-                        ])
-                        
-                        st.write("Territory Summary:")
-                        st.dataframe(metrics_df)
-                        
-                        for territory in territories:
-                            with st.expander(f"Territory {territory.territory_id}"):
-                                territory_df = df.iloc[territory.clients]
-                                st.write(f"Active Clients: {territory.active_clients}")
-                                st.write(f"Inactive Clients: {territory.inactive_clients}")
-                                
-                                for col, value in territory.metrics.items():
-                                    st.write(f"{col} Sum: {value:,.2f}")
-                                    
-                                st.dataframe(territory_df)
-                                
-                                csv = territory_df.to_csv(index=False)
-                                st.download_button(
-                                    f"Download Territory {territory.territory_id}",
-                                    data=csv,
-                                    file_name=f'territory_{territory.territory_id}.csv',
-                                    mime='text/csv'
-                                )
-                    else:
-                        st.error("Optimization failed. Please check your data and selections.")
-                        
-        except Exception as e:
-            st.error(f"Error: {str(e)}")
-            logger.exception("Error in main function")
+
+            weights = None
+            if use_weights:
+                st.write("Attribuer des poids absolus (les poids seront normalisés automatiquement) :")
+                weights = [st.number_input(f"Poids pour {col}", min_value=0.0, value=100.0, step=10.0) for col in balance_columns]
+                total = sum(weights)
+                weights = [w / total for w in weights]
+
+            if st.button("Créer les territoires"):
+                territories, metrics = create_territories(
+                    df, num_territories, balance_columns, weights, years
+                )
+
+                st.subheader("Métriques des territoires")
+                st.write(metrics)
+
+                combined_territories = pd.concat(territories, ignore_index=True)
+
+                st.markdown(
+                    get_download_link(combined_territories, "repartition_territoires.csv"),
+                    unsafe_allow_html=True
+                )
+
+                for i, territory in enumerate(territories):
+                    with st.expander(f"Territoire {i+1} ({len(territory)} comptes)"):
+                        st.write(territory)
+                        st.markdown(
+                            get_download_link(territory, f"territoire_{i+1}.csv"),
+                            unsafe_allow_html=True
+                        )
 
 if __name__ == "__main__":
     main()
