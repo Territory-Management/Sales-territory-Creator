@@ -235,6 +235,45 @@ class TerritoryBalancer:
         
         return is_valid, validation_results
 
+def analyze_csv_structure(file_content: bytes) -> dict:
+    """
+    Analyze CSV file structure to identify potential issues
+    """
+    result = {}
+    
+    # Convert bytes to string for analysis
+    try:
+        content = file_content.decode('utf-8')
+    except UnicodeDecodeError:
+        try:
+            content = file_content.decode('latin1')
+        except Exception:
+            return {"error": "Could not decode file content"}
+    
+    lines = content.split('\n')
+    result['total_lines'] = len(lines)
+    
+    if len(lines) == 0:
+        return {"error": "Empty file"}
+    
+    # Analyze first few lines
+    header = lines[0].strip()
+    result['possible_delimiters'] = {}
+    for delimiter in [',', ';', '\t', '|']:
+        result['possible_delimiters'][delimiter] = header.count(delimiter)
+    
+    # Check column consistency
+    column_counts = []
+    for i, line in enumerate(lines[:20]):  # Check first 20 lines
+        if line.strip():  # Skip empty lines
+            for delimiter in [',', ';', '\t', '|']:
+                if delimiter in line:
+                    column_counts.append((i+1, len(line.split(delimiter))))
+    
+    result['column_counts'] = column_counts
+    
+    return result
+
 def main():
     try:
         st.set_page_config(page_title="Territory Balancer", layout="wide")
@@ -249,6 +288,30 @@ def main():
         
         if uploaded_file:
             try:
+                # Add CSV structure analysis
+                with st.expander("CSV File Analysis", expanded=True):
+                    st.info("Analyzing CSV structure...")
+                    analysis_result = analyze_csv_structure(file_content)
+                    
+                    if "error" in analysis_result:
+                        st.error(f"Analysis error: {analysis_result['error']}")
+                    else:
+                        st.write("File structure:")
+                        st.write(f"- Total lines: {analysis_result['total_lines']}")
+                        st.write("- Possible delimiters found:")
+                        for delimiter, count in analysis_result['possible_delimiters'].items():
+                            if count > 0:
+                                st.write(f"  - '{delimiter}': {count} occurrences in header")
+                        
+                        # Show column count variations
+                        if analysis_result['column_counts']:
+                            varying_columns = len(set(count for _, count in analysis_result['column_counts'])) > 1
+                            if varying_columns:
+                                st.warning("⚠️ Inconsistent number of columns detected:")
+                                for line_num, count in analysis_result['column_counts']:
+                                    if count != analysis_result['column_counts'][0][1]:
+                                        st.write(f"  - Line {line_num}: {count} columns")
+                
                 # First, read the file content
                 file_content = uploaded_file.read()
                 uploaded_file.seek(0)  # Reset file pointer
