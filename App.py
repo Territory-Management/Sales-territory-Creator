@@ -141,15 +141,13 @@ def main():
                 options=numeric_cols + potential_numeric_cols
             )
             
-            date_resiliation = st.selectbox(
-                "Select Date Résiliation Column (Optional)",
-                options=['None'] + df.columns.tolist(),
-                help="Column containing cancellation dates"
-            )
+            # Use a specific name for the date column
+            date_resiliation = "Dt resiliation contrat all"
             
-            if date_resiliation == 'None':
-                date_resiliation = None
-                
+            if date_resiliation not in df.columns:
+                st.error(f"The column '{date_resiliation}' does not exist in the data.")
+                return
+            
             num_territories = st.number_input(
                 "Number of Territories",
                 min_value=2,
