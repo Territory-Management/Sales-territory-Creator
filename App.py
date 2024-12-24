@@ -26,32 +26,26 @@ class TerritoryOptimizer:
     def preprocess_data(self, balance_columns: List[str], date_resiliation: str = None) -> pd.DataFrame:
         """Clean data and identify active/inactive clients."""
         processed_df = self.df.copy()
-        
+
         # Handle active/inactive clients
         if date_resiliation and date_resiliation in processed_df.columns:
-            try:
-                processed_df[date_resiliation] = pd.to_datetime(processed_df[date_resiliation], errors='coerce')
-                processed_df['is_active'] = processed_df[date_resiliation].isna()
-            except Exception as e:
-                logger.error(f"Error converting {date_resiliation} to datetime: {e}")
-                st.error(f"Could not process the date column: {e}")
-                processed_df['is_active'] = True
+            processed_df['is_active'] = pd.to_datetime(processed_df[date_resiliation], errors='coerce').isna()
         else:
             processed_df['is_active'] = True
-        
-        # Clean and ensure numeric columns
+
+        # Ensure numeric columns
         valid_columns = []
         for col in balance_columns:
             try:
-                processed_df[col] = pd.to_numeric(processed_df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True), errors='coerce')
+                processed_df[col] = pd.to_numeric(processed_df[col].str.replace(r'[^\d.-]', '', regex=True), errors='coerce')
                 if processed_df[col].notnull().all():
                     valid_columns.append(col)
             except Exception as e:
                 logger.warning(f"Skipping column {col}: {e}")
-        
+
         if not valid_columns:
             st.error("No valid numeric columns were selected for balancing.")
-            return pd.DataFrame()
+            return pd.DataFrame(), valid_columns
         
         processed_df.dropna(subset=valid_columns, inplace=True)
         return processed_df, valid_columns
