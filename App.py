@@ -105,7 +105,15 @@ def main():
     
     if uploaded_file:
         try:
-            df = pd.read_csv(uploaded_file)
+            # Handle CSV with inconsistent columns
+            df = pd.read_csv(uploaded_file, on_bad_lines='warn', engine='python')
+            
+            # Log information about malformed rows
+            if df.shape[0] == 0:
+                st.error("No valid data rows found in CSV")
+                return
+                
+            st.info(f"Successfully loaded {df.shape[0]} rows and {df.shape[1]} columns")
             
             numeric_cols = df.select_dtypes(include=[np.number]).columns
             balance_columns = st.multiselect(
