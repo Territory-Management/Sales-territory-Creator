@@ -235,11 +235,11 @@ class TerritoryBalancer:
         return is_valid, validation_results
 
 def main():
-    st.set_page_config(page_title="Territory Balancer", layout="wide")
-    
-    st.title('Advanced Territory Balancer 🌐')
-    
     try:
+        st.set_page_config(page_title="Territory Balancer", layout="wide")
+        
+        st.title('Advanced Territory Balancer 🌐')
+        
         uploaded_file = st.file_uploader(
             "Upload CSV File", 
             type=['csv'], 
@@ -349,6 +349,10 @@ def main():
                 except Exception as e:
                     st.error(f"Error creating territories: {str(e)}")
                     logger.exception("Territory creation error")
+    
+    except Exception as e:
+        st.error(f"An unexpected error occurred: {str(e)}")
+        logger.exception("Unexpected error in main function")
 
 if __name__ == "__main__":
     main()
