@@ -2,137 +2,174 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import base64
-import csv
-from io import StringIO
-from typing import List
+import chardet
+from typing import List, Optional
 
-def load_data(file) -> pd.DataFrame:
-    """Load and clean the CSV file to handle parsing errors."""
+def load_data(file) -> Optional[pd.DataFrame]:
+    """Charge le fichier CSV en détectant l'encodage et gère les erreurs"""
     try:
-        raw_data = file.read().decode('utf-8')
+        # Détection de l'encodage
+        raw_data = file.read()
         file.seek(0)
+        encoding = chardet.detect(raw_data)['encoding']
         
-        # Use csv.reader to manually filter out malformed lines
-        reader = csv.reader(StringIO(raw_data), delimiter=',')
-        cleaned_data = []
-        expected_columns = None
-        
-        for i, row in enumerate(reader):
-            if i == 0:
-                expected_columns = len(row)  # Determine the number of columns expected
-                cleaned_data.append(row)     # Include the header
-            elif len(row) == expected_columns:
-                cleaned_data.append(row)
-            else:
-                st.warning(f"Skipping malformed line {i+1}: {row}")
-
-        # Convert cleaned data back to a CSV string
-        cleaned_csv = StringIO()
-        writer = csv.writer(cleaned_csv, delimiter=',')
-        writer.writerows(cleaned_data)
-        cleaned_csv.seek(0)
-        
-        # Load the DataFrame from the cleaned CSV string
-        df = pd.read_csv(cleaned_csv)
+        # Lecture du CSV avec l'encodage détecté
+        df = pd.read_csv(file, encoding=encoding, engine='python', sep=None)
         return df
     except Exception as e:
-        st.error(f"Error loading the file: {str(e)}")
-        return pd.DataFrame()
+        st.error(f"Erreur lors du chargement du fichier : {str(e)}")
+        return None
 
-def normalize_data(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
-    """Normalize specified columns in the DataFrame using min-max scaling."""
-    for col in columns:
-        min_col = df[col].min()
-        max_col = df[col].max()
-        df[col] = (df[col] - min_col) / (max_col - min_col)
-    return df
+def normalize_numeric_column(series: pd.Series) -> pd.Series:
+    """Normalise les colonnes avec des symboles monétaires et des caractères non numériques"""
+    return pd.to_numeric(
+        series.astype(str).str.replace(r'[\u20ac$\u00a3,]', '', regex=True).str.replace(',', '.').str.strip(),
+        errors='coerce'
+    )
 
-def calculate_scores(df: pd.DataFrame, balance_columns: List[str]) -> pd.Series:
-    """Calculate scores using equal weights for each column."""
-    weights = np.ones(len(balance_columns)) / len(balance_columns)
-    scores = df[balance_columns].dot(weights)
-    return scores
-
-def distribute_territories(df: pd.DataFrame, num_territories: int) -> List[pd.DataFrame]:
-    """Distribute clients into territories ensuring equity."""
-    territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
-    territory_totals = np.zeros(num_territories)
-
-    for _, client in df.iterrows():
-        min_idx = np.argmin(territory_totals)
-        territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([client])], ignore_index=True)
-        territory_totals[min_idx] += client['score']
-
+def distribute_termination_clients(df: pd.DataFrame, termination_clients: pd.DataFrame, num_territories: int) -> List[pd.DataFrame]:
+    """Ventile les clients avec une date de résiliation équitablement parmi les territoires"""
+    territories = [df.iloc[i::num_territories] for i in range(num_territories)]
+    
+    # Ajout des clients avec résiliation équitablement
+    for i, client in enumerate(termination_clients.itertuples(index=False)):
+        territories[i % num_territories] = pd.concat([territories[i % num_territories], pd.DataFrame([client._asdict()])], ignore_index=True)
+    
     return territories
 
-def calculate_metrics(territories: List[pd.DataFrame], balance_columns: List[str]) -> pd.DataFrame:
-    """Calculate metrics for each territory."""
+def create_territories(
+    df: pd.DataFrame,
+    num_territories: int,
+    balance_columns: List[str],
+    weights: Optional[List[float]] = None,
+    years: Optional[List[int]] = None
+) -> tuple[List[pd.DataFrame], pd.DataFrame]:
+    """Crée des territoires équilibrés avec un ajustement des écarts"""
+    # Créer une copie de travail du DataFrame
+    working_df = df.copy()
+
+    # Si des années de résiliation sont spécifiées, séparer les clients
+    termination_clients = pd.DataFrame()
+    if years:
+        working_df['Dt resiliation contrat all'] = pd.to_datetime(working_df['Dt resiliation contrat all'], errors='coerce')
+        termination_clients = working_df[working_df['Dt resiliation contrat all'].dt.year.isin(years)]
+        working_df = working_df[~working_df['Dt resiliation contrat all'].dt.year.isin(years)]
+
+    # Normaliser les colonnes
+    for col in balance_columns:
+        working_df[col] = normalize_numeric_column(working_df[col])
+
+    # Si les poids ne sont pas définis, les répartir uniformément
+    if weights is None:
+        weights = [1 / len(balance_columns)] * len(balance_columns)
+
+    # Calculer le score pondéré
+    working_df['score'] = sum(working_df[col] * weight for col, weight in zip(balance_columns, weights))
+
+    # Trier les données par score décroissant
+    working_df = working_df.sort_values('score', ascending=False)
+
+    # Répartir les données en territoires
+    territories = [working_df.iloc[i::num_territories] for i in range(num_territories)]
+
+    # Ventiler les clients avec résiliation équitablement
+    if not termination_clients.empty:
+        territories = distribute_termination_clients(pd.concat(territories, ignore_index=True), termination_clients, num_territories)
+
+    # Ajouter une colonne "Territory" pour identifier chaque territoire
+    for i, territory in enumerate(territories):
+        territory['Territory'] = i + 1
+
+    # Calcul des métriques pour chaque territoire
     metrics = []
     for i, territory in enumerate(territories):
-        metric = {
-            'Territory': i + 1,
-            'Total Clients': len(territory),
-            'Resiliations': territory['Dt resiliation contrat all'].notna().sum()
-        }
-        
+        metric = {'Territory': i + 1, 'Count': len(territory)}
         for col in balance_columns:
-            metric[f'{col} Total'] = territory[col].sum()
-            metric[f'{col} Average'] = territory[col].mean()
+            metric[f'{col}_total'] = territory[col].sum()
         metrics.append(metric)
-    
-    return pd.DataFrame(metrics)
+
+    return territories, pd.DataFrame(metrics)
 
 def get_download_link(df: pd.DataFrame, filename: str) -> str:
-    """Generate a download link for a DataFrame."""
-    csv = df.to_csv(index=False, encoding='utf-8-sig')
+    """Génère un lien de téléchargement CSV"""
+    csv = df.to_csv(index=False)
     b64 = base64.b64encode(csv.encode()).decode()
-    return f'<a href="data:file/csv;base64,{b64}" download="{filename}">Download {filename}</a>'
-
-def display_territory_metrics(metrics: pd.DataFrame):
-    """Display territory metrics with Streamlit."""
-    st.subheader("📊 Territory Metrics")
-    st.dataframe(metrics, use_container_width=True)
+    return f'<a href="data:file/csv;base64,{b64}" download="{filename}">Télécharger {filename}</a>'
 
 def main():
-    st.set_page_config(layout="wide")
-    st.title('Territory Balancer')
+    st.title('Fast Territory Balancer')
 
-    uploaded_file = st.file_uploader("📂 Upload a CSV file", type="csv")
-    if not uploaded_file:
-        st.info("Upload your CSV file to get started")
-        return
+    uploaded_file = st.file_uploader("Téléchargez un fichier CSV", type="csv")
+    if uploaded_file:
+        df = load_data(uploaded_file)
 
-    df = load_data(uploaded_file)
-    if df.empty:
-        return
+        if df is not None:
+            st.write("Aperçu des données :", df.head())
+            st.write("Colonnes disponibles :", df.columns.tolist())
 
-    balance_columns = st.multiselect(
-        "Columns to Balance",
-        options=[c for c in df.columns if c != 'Dt resiliation contrat all'],
-        default=df.select_dtypes(include=['float64', 'int64']).columns.tolist()
-    )
+            # Sélectionner les colonnes à équilibrer
+            balance_columns = st.multiselect(
+                "Sélectionner les colonnes à équilibrer",
+                options=df.columns.tolist(),
+                default=df.columns.tolist()[:1]
+            )
 
-    num_territories = st.number_input(
-        "Number of Territories", 
-        min_value=2, 
-        max_value=min(len(df), 100), 
-        value=4
-    )
+            if not balance_columns:
+                st.error("Veuillez sélectionner au moins une colonne à équilibrer")
+                return
 
-    # Normalize and calculate scores
-    df = normalize_data(df, balance_columns)
-    df['score'] = calculate_scores(df, balance_columns)
+            # Interface pour entrer le nombre de territoires et choisir les poids
+            col1, col2 = st.columns(2)
+            with col1:
+                num_territories = st.number_input(
+                    "Nombre de territoires", min_value=2, max_value=len(df), value=2
+                )
 
-    if st.button("🚀 Generate Territories"):
-        territories = distribute_territories(df, num_territories)
-        metrics = calculate_metrics(territories, balance_columns)
+            with col2:
+                use_weights = st.checkbox("Utiliser des poids personnalisés", value=False)
 
-        display_territory_metrics(metrics)
+            # Sélectionner plusieurs années de résiliation pour filtrer
+            years = st.multiselect(
+                "Sélectionner les années de résiliation",
+                options=[2024, 2025, 2026],
+                default=[2024]
+            )
 
-        st.subheader("📥 Download")
-        combined = pd.concat(territories, ignore_index=True)
-        combined['Territory'] = combined['Territory'].astype(int)
-        st.markdown(get_download_link(combined, "all_territories.csv"), unsafe_allow_html=True)
+            # Calculer les poids si nécessaire
+            weights = None
+            if use_weights:
+                st.write("Attribuer des poids absolus (les poids seront normalisés automatiquement) :")
+                weights = [st.number_input(f"Poids pour {col}", min_value=0.0, value=100.0, step=10.0) for col in balance_columns]
+                total = sum(weights)
+                weights = [w / total for w in weights]
+
+            # Créer les territoires lorsque l'utilisateur clique sur le bouton
+            if st.button("Créer les territoires"):
+                territories, metrics = create_territories(
+                    df, num_territories, balance_columns, weights, years
+                )
+
+                # Afficher les métriques des territoires
+                st.subheader("Métriques des territoires")
+                st.write(metrics)
+
+                # Fusionner tous les territoires en un seul DataFrame avec leur numéro de territoire
+                combined_territories = pd.concat(territories, ignore_index=True)
+
+                # Lien pour télécharger le fichier combiné
+                st.markdown(
+                    get_download_link(combined_territories, "repartition_territoires.csv"),
+                    unsafe_allow_html=True
+                )
+
+                # Afficher les territoires avec des liens de téléchargement
+                for i, territory in enumerate(territories):
+                    with st.expander(f"Territoire {i+1} ({len(territory)} comptes)"):
+                        st.write(territory)
+                        st.markdown(
+                            get_download_link(territory, f"territoire_{i+1}.csv"),
+                            unsafe_allow_html=True
+                        )
 
 if __name__ == "__main__":
     main()
