@@ -247,21 +247,48 @@ def main():
         )
         
         if uploaded_file:
-            # Try different encodings if initial read fails
-            encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252']
-            df = None
-            
-            for encoding in encodings:
-                try:
-                    df = pd.read_csv(uploaded_file, encoding=encoding)
-                    st.success(f"File loaded successfully with {encoding} encoding")
-                    break
-                except Exception as e:
-                    continue
-            
-            if df is None:
-                st.error("Could not read the file with any supported encoding")
-                return
+            try:
+                # First, read the file content
+                file_content = uploaded_file.read()
+                uploaded_file.seek(0)  # Reset file pointer
+                
+                # Use chardet to detect encoding
+                import chardet
+                detected = chardet.detect(file_content)
+                if detected['confidence'] > 0.5:
+                    try:
+                        df = pd.read_csv(uploaded_file, encoding=detected['encoding'])
+                        st.success(f"File loaded successfully with {detected['encoding']} encoding (confidence: {detected['confidence']:.2%})")
+                    except Exception as e:
+                        st.warning(f"Detected encoding failed, trying alternatives. Error: {str(e)}")
+                        uploaded_file.seek(0)  # Reset file pointer
+                        raise
+                else:
+                    raise ValueError("Low confidence in detected encoding")
+                    
+            except Exception as first_attempt:
+                # If automatic detection fails, try common encodings
+                uploaded_file.seek(0)  # Reset file pointer
+                encodings = ['utf-8', 'latin1', 'iso-8859-1', 'cp1252', 'utf-16', 'ascii']
+                df = None
+                
+                for encoding in encodings:
+                    try:
+                        uploaded_file.seek(0)  # Reset file pointer for each attempt
+                        df = pd.read_csv(uploaded_file, encoding=encoding)
+                        st.success(f"File loaded successfully with {encoding} encoding (fallback)")
+                        break
+                    except Exception as e:
+                        st.warning(f"Failed with {encoding} encoding: {str(e)}")
+                        continue
+                
+                if df is None:
+                    st.error("Could not read the file with any supported encoding. Please ensure your CSV file is properly formatted and try saving it as UTF-8.")
+                    st.info("Tips for fixing CSV encoding issues:" + 
+                           "\n- Open the file in a text editor and save it as UTF-8" +
+                           "\n- If using Excel, try 'Save As' and choose 'CSV UTF-8' format" +
+                           "\n- Check for any special characters or formatting issues in the file")
+                    return
             
             # Display data overview in an expandable section
             with st.expander("Data Overview", expanded=True):
