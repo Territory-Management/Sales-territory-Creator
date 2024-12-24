@@ -20,7 +20,8 @@ def load_data(file) -> pd.DataFrame:
         for i, row in enumerate(reader):
             if i == 0:
                 expected_columns = len(row)  # Determine the number of columns expected
-            if len(row) == expected_columns:
+                cleaned_data.append(row)     # Include the header
+            elif len(row) == expected_columns:
                 cleaned_data.append(row)
             else:
                 st.warning(f"Skipping malformed line {i+1}: {row}")
