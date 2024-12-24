@@ -1,134 +1,141 @@
 import streamlit as st
 import pandas as pd
-import plotly.express as px
-from datetime import datetime
-import calendar
+import numpy as np
+import base64
+import csv
+from io import StringIO
+from typing import List
+
+def load_data(file) -> pd.DataFrame:
+    """Load and clean the CSV file to handle parsing errors."""
+    try:
+        raw_data = file.read().decode('utf-8')
+        file.seek(0)
+        
+        # Use csv.reader to manually filter out malformed lines
+        reader = csv.reader(StringIO(raw_data), delimiter=',')
+        cleaned_data = []
+        expected_columns = None
+        
+        for i, row in enumerate(reader):
+            if i == 0:
+                expected_columns = len(row)  # Determine the number of columns expected
+                cleaned_data.append(row)     # Include the header
+            elif len(row) == expected_columns:
+                cleaned_data.append(row)
+            else:
+                st.warning(f"Skipping malformed line {i+1}: {row}")
+
+        # Convert cleaned data back to a CSV string
+        cleaned_csv = StringIO()
+        writer = csv.writer(cleaned_csv, delimiter=',')
+        writer.writerows(cleaned_data)
+        cleaned_csv.seek(0)
+        
+        # Load the DataFrame from the cleaned CSV string
+        df = pd.read_csv(cleaned_csv)
+        return df
+    except Exception as e:
+        st.error(f"Error loading the file: {str(e)}")
+        return pd.DataFrame()
+
+def normalize_data(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
+    """Normalize specified columns in the DataFrame using min-max scaling."""
+    for col in columns:
+        min_col = df[col].min()
+        max_col = df[col].max()
+        df[col] = (df[col] - min_col) / (max_col - min_col)
+    return df
+
+def calculate_scores(df: pd.DataFrame, balance_columns: List[str]) -> pd.Series:
+    """Calculate scores using equal weights for each column."""
+    weights = np.ones(len(balance_columns)) / len(balance_columns)
+    scores = df[balance_columns].dot(weights)
+    return scores
+
+def distribute_territories(df: pd.DataFrame, num_territories: int) -> List[pd.DataFrame]:
+    """Distribute clients into territories ensuring equity."""
+    territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
+    territory_totals = np.zeros(num_territories)
+
+    # Sort by score to distribute high-value clients first
+    df = df.sort_values('score', ascending=False)
+
+    for _, client in df.iterrows():
+        min_idx = np.argmin(territory_totals)
+        territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([client])], ignore_index=True)
+        territory_totals[min_idx] += client['score']
+
+    return territories
+
+def calculate_metrics(territories: List[pd.DataFrame], balance_columns: List[str]) -> pd.DataFrame:
+    """Calculate metrics for each territory."""
+    metrics = []
+    for i, territory in enumerate(territories):
+        metric = {
+            'Territory': i + 1,
+            'Total Clients': len(territory),
+            'Resiliations': territory['Dt resiliation contrat all'].notna().sum()
+        }
+        
+        for col in balance_columns:
+            metric[f'{col} Total'] = territory[col].sum()
+            metric[f'{col} Average'] = territory[col].mean()
+        metrics.append(metric)
+    
+    return pd.DataFrame(metrics)
+
+def get_download_link(df: pd.DataFrame, filename: str) -> str:
+    """Generate a download link for a DataFrame."""
+    csv = df.to_csv(index=False, encoding='utf-8-sig')
+    b64 = base64.b64encode(csv.encode()).decode()
+    return f'<a href="data:file/csv;base64,{b64}" download="{filename}">Download {filename}</a>'
+
+def display_territory_metrics(metrics: pd.DataFrame):
+    """Display territory metrics with Streamlit."""
+    st.subheader("📊 Territory Metrics")
+    st.dataframe(metrics, use_container_width=True)
 
 def main():
     st.set_page_config(layout="wide")
-    
-    with st.sidebar:
-        st.image("https://your-logo.png", width=200)
-        st.title("Territory Balancer")
-        uploaded_file = st.file_uploader("📂 Fichier CSV", type="csv")
+    st.title('Territory Balancer')
 
+    uploaded_file = st.file_uploader("📂 Upload a CSV file", type="csv")
     if not uploaded_file:
-        st.markdown("""
-        <div style='text-align: center; padding: 50px;'>
-            <h1>👋 Bienvenue sur Territory Balancer</h1>
-            <p>Importez votre fichier CSV pour commencer</p>
-        </div>
-        """, unsafe_allow_html=True)
+        st.info("Upload your CSV file to get started")
         return
 
     df = load_data(uploaded_file)
-    if df is None:
+    if df.empty:
         return
 
-    # Configuration des colonnes
-    col1, col2 = st.columns([2, 1])
-    with col1:
-        st.subheader("📊 Aperçu des données")
-        st.dataframe(df.head(), use_container_width=True)
-        
-    with col2:
-        st.subheader("🎯 Configuration")
-        num_territories = st.number_input("Nombre de territoires", 2, 20, 4)
-        balance_columns = st.multiselect(
-            "Colonnes à équilibrer",
-            options=[c for c in df.columns if c != 'Dt resiliation contrat all'],
-            default=df.select_dtypes(include=['float64', 'int64']).columns[:1].tolist()
-        )
-
-    # Gestion des résiliations
-    st.subheader("📅 Gestion des résiliations")
-    col3, col4 = st.columns(2)
-    
-    with col3:
-        df['Dt resiliation contrat all'] = pd.to_datetime(df['Dt resiliation contrat all'], errors='coerce')
-        resiliation_stats = analyze_terminations(df)
-        
-        st.metric("Clients avec résiliation", 
-                 f"{resiliation_stats['total_terminations']} ({resiliation_stats['termination_percentage']:.1f}%)")
-        
-        # Graphique des résiliations par mois
-        fig = px.bar(resiliation_stats['monthly_data'], 
-                    title="Résiliations par mois",
-                    labels={'value': 'Nombre', 'month': 'Mois'})
-        st.plotly_chart(fig, use_container_width=True)
-    
-    with col4:
-        resiliation_strategy = st.radio(
-            "Stratégie de distribution des résiliations",
-            ["Équitable", "Par date", "Par valeur"],
-            help="Comment répartir les clients avec résiliation"
-        )
-        
-        if resiliation_strategy == "Par date":
-            max_per_territory = st.slider(
-                "Max. résiliations par territoire/mois",
-                1, 20, 5
-            )
-
-    if st.button("🚀 Générer les territoires", type="primary"):
-        territories, metrics = create_territories(
-            df=df,
-            num_territories=num_territories,
-            balance_columns=balance_columns,
-            resiliation_strategy=resiliation_strategy,
-            max_terminations_per_territory=(max_per_territory if resiliation_strategy == "Par date" else None)
-        )
-        
-        display_results(territories, metrics)
-
-def analyze_terminations(df: pd.DataFrame) -> dict:
-    """Analyse les statistiques de résiliation"""
-    termination_data = df[df['Dt resiliation contrat all'].notna()]
-    total = len(df)
-    total_terminations = len(termination_data)
-    
-    monthly_data = (
-        termination_data['Dt resiliation contrat all']
-        .dt.to_period('M')
-        .value_counts()
-        .sort_index()
-        .reset_index()
+    balance_columns = st.multiselect(
+        "Columns to Balance",
+        options=[c for c in df.columns if c != 'Dt resiliation contrat all'],
+        default=df.select_dtypes(include=['float64', 'int64']).columns.tolist()
     )
-    monthly_data['month'] = monthly_data['index'].astype(str)
-    
-    return {
-        'total_terminations': total_terminations,
-        'termination_percentage': (total_terminations / total * 100),
-        'monthly_data': monthly_data
-    }
 
-def display_results(territories: list, metrics: pd.DataFrame):
-    """Affiche les résultats avec graphiques"""
-    st.subheader("📈 Résultats")
-    
-    # Métriques principales
-    cols = st.columns(len(territories))
-    for i, (col, territory) in enumerate(zip(cols, territories)):
-        with col:
-            st.metric(
-                f"Territoire {i+1}",
-                f"{len(territory)} clients",
-                f"{len(territory[territory['Dt resiliation contrat all'].notna()])} résiliations"
-            )
-    
-    # Graphiques de distribution
-    for col in metrics.columns:
-        if col not in ['Territory', 'Count']:
-            fig = px.bar(metrics, 
-                        x='Territory', 
-                        y=col,
-                        title=f"Distribution de {col}")
-            st.plotly_chart(fig, use_container_width=True)
-    
-    # Export des données
-    st.download_button(
-        "⬇️ Télécharger tous les territoires",
-        pd.concat(territories).to_csv(index=False).encode('utf-8'),
-        "territoires.csv",
-        "text/csv"
+    num_territories = st.number_input(
+        "Number of Territories", 
+        min_value=2, 
+        max_value=min(len(df), 100), 
+        value=4
     )
+
+    # Normalize and calculate scores
+    df = normalize_data(df, balance_columns)
+    df['score'] = calculate_scores(df, balance_columns)
+
+    if st.button("🚀 Generate Territories"):
+        territories = distribute_territories(df, num_territories)
+        metrics = calculate_metrics(territories, balance_columns)
+
+        display_territory_metrics(metrics)
+
+        st.subheader("📥 Download")
+        combined = pd.concat(territories, ignore_index=True)
+        combined['Territory'] = combined['Territory'].astype(int)
+        st.markdown(get_download_link(combined, "all_territories.csv"), unsafe_allow_html=True)
+
+if __name__ == "__main__":
+    main()
