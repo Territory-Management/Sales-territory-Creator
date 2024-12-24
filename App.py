@@ -23,6 +23,10 @@ def load_data(file) -> pd.DataFrame:
         
         # Create a DataFrame using the standardized rows
         df = pd.DataFrame(standardized_rows[1:], columns=standardized_rows[0])
+        
+        # Convert all numerical columns to appropriate data types
+        df = df.apply(pd.to_numeric, errors='ignore')
+        
         return df
     except Exception as e:
         st.error(f"Error loading the file: {str(e)}")
@@ -31,15 +35,18 @@ def load_data(file) -> pd.DataFrame:
 def normalize_data(df: pd.DataFrame, columns: List[str]) -> pd.DataFrame:
     """Normalize specified columns in the DataFrame using min-max scaling."""
     for col in columns:
-        min_col = df[col].min()
-        max_col = df[col].max()
-        df[col] = (df[col] - min_col) / (max_col - min_col)
+        if pd.api.types.is_numeric_dtype(df[col]):
+            min_col = df[col].min()
+            max_col = df[col].max()
+            df[col] = (df[col] - min_col) / (max_col - min_col)
+        else:
+            st.warning(f"Column '{col}' is not numeric and will be ignored in normalization.")
     return df
 
 def calculate_scores(df: pd.DataFrame, balance_columns: List[str]) -> pd.Series:
     """Calculate scores using equal weights for each column."""
     weights = np.ones(len(balance_columns)) / len(balance_columns)
-    scores = df[balance_columns].dot(weights)
+    scores = df[balance_columns].fillna(0).dot(weights)
     return scores
 
 def distribute_territories(df: pd.DataFrame, num_territories: int) -> List[pd.DataFrame]:
@@ -101,8 +108,8 @@ def main():
 
     balance_columns = st.multiselect(
         "Columns to Balance",
-        options=[c for c in df.columns if c != 'Dt resiliation contrat all'],
-        default=df.select_dtypes(include=['float64', 'int64']).columns.tolist()
+        options=[c for c in df.columns if pd.api.types.is_numeric_dtype(df[c])],
+        default=df.select_dtypes(include=[np.number]).columns.tolist()
     )
 
     num_territories = st.number_input(
