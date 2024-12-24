@@ -2,10 +2,9 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from dataclasses import dataclass
-from typing import List, Dict, Tuple
+from typing import List, Dict
 from pulp import *
 import logging
-from datetime import datetime
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -29,7 +28,7 @@ class TerritoryOptimizer:
         processed_df = self.df.copy()
         
         # Handle active/inactive clients
-        if date_resiliation:
+        if date_resiliation and date_resiliation in processed_df.columns:
             processed_df['is_active'] = processed_df[date_resiliation].isna()
         else:
             processed_df['is_active'] = True
@@ -40,7 +39,7 @@ class TerritoryOptimizer:
                 processed_df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True),
                 errors='coerce'
             )
-            
+        
         processed_df.dropna(subset=balance_columns, inplace=True)
         return processed_df
         
@@ -126,8 +125,8 @@ def main():
             st.info(f"Loaded {df.shape[0]} rows and {df.shape[1]} columns")
             
             # Column selection
-            numeric_cols = df.select_dtypes(include=[np.number]).columns
-            date_cols = df.select_dtypes(include=['object']).columns
+            numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
+            date_cols = df.select_dtypes(include=['object']).columns.tolist()
             
             balance_columns = st.multiselect(
                 "Select Columns for Balancing",
@@ -136,7 +135,7 @@ def main():
             
             date_resiliation = st.selectbox(
                 "Select Date Résiliation Column (Optional)",
-                options=['None'] + list(date_cols),
+                options=['None'] + date_cols,
                 help="Column containing cancellation dates"
             )
             
@@ -151,46 +150,49 @@ def main():
             )
             
             if st.button("Optimize Territories"):
-                optimizer = TerritoryOptimizer(df)
-                optimizer.num_territories = int(num_territories)
-                
-                territories = optimizer.optimize_territories(
-                    balance_columns,
-                    date_resiliation
-                )
-                
-                # Display results
-                metrics_df = pd.DataFrame([
-                    {
-                        'Territory': t.territory_id,
-                        'Active Clients': t.active_clients,
-                        'Inactive Clients': t.inactive_clients,
-                        **{f'{col} Sum': t.metrics[col] for col in balance_columns}
-                    }
-                    for t in territories
-                ])
-                
-                st.write("Territory Summary:")
-                st.dataframe(metrics_df)
-                
-                for territory in territories:
-                    with st.expander(f"Territory {territory.territory_id}"):
-                        territory_df = df.iloc[territory.clients]
-                        st.write(f"Active Clients: {territory.active_clients}")
-                        st.write(f"Inactive Clients: {territory.inactive_clients}")
-                        
-                        for col, value in territory.metrics.items():
-                            st.write(f"{col} Sum: {value:,.2f}")
+                if not balance_columns:
+                    st.warning("Please select at least one column for balancing.")
+                else:
+                    optimizer = TerritoryOptimizer(df)
+                    optimizer.num_territories = int(num_territories)
+                    
+                    territories = optimizer.optimize_territories(
+                        balance_columns,
+                        date_resiliation
+                    )
+                    
+                    # Display results
+                    metrics_df = pd.DataFrame([
+                        {
+                            'Territory': t.territory_id,
+                            'Active Clients': t.active_clients,
+                            'Inactive Clients': t.inactive_clients,
+                            **{f'{col} Sum': t.metrics[col] for col in balance_columns}
+                        }
+                        for t in territories
+                    ])
+                    
+                    st.write("Territory Summary:")
+                    st.dataframe(metrics_df)
+                    
+                    for territory in territories:
+                        with st.expander(f"Territory {territory.territory_id}"):
+                            territory_df = df.iloc[territory.clients]
+                            st.write(f"Active Clients: {territory.active_clients}")
+                            st.write(f"Inactive Clients: {territory.inactive_clients}")
                             
-                        st.dataframe(territory_df)
-                        
-                        csv = territory_df.to_csv(index=False)
-                        st.download_button(
-                            f"Download Territory {territory.territory_id}",
-                            data=csv,
-                            file_name=f'territory_{territory.territory_id}.csv',
-                            mime='text/csv'
-                        )
+                            for col, value in territory.metrics.items():
+                                st.write(f"{col} Sum: {value:,.2f}")
+                                
+                            st.dataframe(territory_df)
+                            
+                            csv = territory_df.to_csv(index=False)
+                            st.download_button(
+                                f"Download Territory {territory.territory_id}",
+                                data=csv,
+                                file_name=f'territory_{territory.territory_id}.csv',
+                                mime='text/csv'
+                            )
                         
         except Exception as e:
             st.error(f"Error: {str(e)}")
