@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from dataclasses import dataclass
 from typing import List, Dict
-from pulp import *
+from pulp import LpProblem, LpMinimize, LpVariable, lpSum, value
 import logging
 
 logging.basicConfig(level=logging.INFO)
@@ -22,7 +22,7 @@ class TerritoryOptimizer:
         self.df = df.copy()
         self.num_territories = 2
         self.balance_columns: List[str] = []
-        
+
     def preprocess_data(self, balance_columns: List[str], date_resiliation: str = None) -> pd.DataFrame:
         """Clean data and identify active/inactive clients."""
         processed_df = self.df.copy()
@@ -39,19 +39,29 @@ class TerritoryOptimizer:
         else:
             processed_df['is_active'] = True
         
-        # Clean numeric columns
+        # Clean and ensure numeric columns
+        valid_columns = []
         for col in balance_columns:
-            processed_df[col] = pd.to_numeric(
-                processed_df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True),
-                errors='coerce'
-            )
+            try:
+                processed_df[col] = pd.to_numeric(processed_df[col].astype(str).str.replace(r'[^\d.-]', '', regex=True), errors='coerce')
+                if processed_df[col].notnull().all():
+                    valid_columns.append(col)
+            except Exception as e:
+                logger.warning(f"Skipping column {col}: {e}")
         
-        processed_df.dropna(subset=balance_columns, inplace=True)
-        return processed_df
+        if not valid_columns:
+            st.error("No valid numeric columns were selected for balancing.")
+            return pd.DataFrame()
         
+        processed_df.dropna(subset=valid_columns, inplace=True)
+        return processed_df, valid_columns
+    
     def optimize_territories(self, balance_columns: List[str], date_resiliation: str = None) -> List[TerritoryMetrics]:
         """Create balanced territories considering active/inactive clients."""
-        processed_df = self.preprocess_data(balance_columns, date_resiliation)
+        processed_df, valid_columns = self.preprocess_data(balance_columns, date_resiliation)
+        if processed_df.empty:
+            return []
+        
         n_clients = len(processed_df)
         
         # Initialize optimization problem
@@ -65,11 +75,11 @@ class TerritoryOptimizer:
         
         # Calculate target values per territory
         targets = {col: processed_df[col].sum() / self.num_territories 
-                  for col in balance_columns}
+                  for col in valid_columns}
         
         # Territory sums for each metric
         territory_sums = {}
-        for col in balance_columns:
+        for col in valid_columns:
             values = processed_df[col].values
             for j in range(self.num_territories):
                 territory_sums[(col,j)] = lpSum(values[i] * x[i,j] 
@@ -77,7 +87,7 @@ class TerritoryOptimizer:
         
         # Objective function: minimize total deviation from target
         prob += lpSum(abs(territory_sums[(col,j)] - targets[col]) 
-                     for col in balance_columns 
+                     for col in valid_columns 
                      for j in range(self.num_territories))
         
         # Each client in exactly one territory
@@ -112,7 +122,7 @@ class TerritoryOptimizer:
             territories.append(TerritoryMetrics(
                 territory_id=j+1,
                 clients=clients,
-                metrics={col: territory_df[col].sum() for col in balance_columns},
+                metrics={col: territory_df[col].sum() for col in valid_columns},
                 active_clients=territory_df['is_active'].sum(),
                 inactive_clients=(~territory_df['is_active']).sum()
             ))
@@ -130,9 +140,8 @@ def main():
             df = pd.read_csv(uploaded_file, on_bad_lines='warn', engine='python')
             st.info(f"Loaded {df.shape[0]} rows and {df.shape[1]} columns")
             
-            # Ensure that numeric columns are detected correctly
+            # Detect numeric columns and potential numeric columns
             numeric_cols = df.select_dtypes(include=[np.number]).columns.tolist()
-            # Let's include columns that might be numbers stored as strings
             potential_numeric_cols = df.columns[df.dtypes == 'object'].tolist()
             
             # Allow user to select numeric columns, including those that can be converted
@@ -167,38 +176,41 @@ def main():
                         date_resiliation
                     )
                     
-                    # Display results
-                    metrics_df = pd.DataFrame([
-                        {
-                            'Territory': t.territory_id,
-                            'Active Clients': t.active_clients,
-                            'Inactive Clients': t.inactive_clients,
-                            **{f'{col} Sum': t.metrics[col] for col in balance_columns}
-                        }
-                        for t in territories
-                    ])
-                    
-                    st.write("Territory Summary:")
-                    st.dataframe(metrics_df)
-                    
-                    for territory in territories:
-                        with st.expander(f"Territory {territory.territory_id}"):
-                            territory_df = df.iloc[territory.clients]
-                            st.write(f"Active Clients: {territory.active_clients}")
-                            st.write(f"Inactive Clients: {territory.inactive_clients}")
-                            
-                            for col, value in territory.metrics.items():
-                                st.write(f"{col} Sum: {value:,.2f}")
+                    if territories:
+                        # Display results
+                        metrics_df = pd.DataFrame([
+                            {
+                                'Territory': t.territory_id,
+                                'Active Clients': t.active_clients,
+                                'Inactive Clients': t.inactive_clients,
+                                **{f'{col} Sum': t.metrics[col] for col in balance_columns}
+                            }
+                            for t in territories
+                        ])
+                        
+                        st.write("Territory Summary:")
+                        st.dataframe(metrics_df)
+                        
+                        for territory in territories:
+                            with st.expander(f"Territory {territory.territory_id}"):
+                                territory_df = df.iloc[territory.clients]
+                                st.write(f"Active Clients: {territory.active_clients}")
+                                st.write(f"Inactive Clients: {territory.inactive_clients}")
                                 
-                            st.dataframe(territory_df)
-                            
-                            csv = territory_df.to_csv(index=False)
-                            st.download_button(
-                                f"Download Territory {territory.territory_id}",
-                                data=csv,
-                                file_name=f'territory_{territory.territory_id}.csv',
-                                mime='text/csv'
-                            )
+                                for col, value in territory.metrics.items():
+                                    st.write(f"{col} Sum: {value:,.2f}")
+                                    
+                                st.dataframe(territory_df)
+                                
+                                csv = territory_df.to_csv(index=False)
+                                st.download_button(
+                                    f"Download Territory {territory.territory_id}",
+                                    data=csv,
+                                    file_name=f'territory_{territory.territory_id}.csv',
+                                    mime='text/csv'
+                                )
+                    else:
+                        st.error("Optimization failed. Please check your data and selections.")
                         
         except Exception as e:
             st.error(f"Error: {str(e)}")
