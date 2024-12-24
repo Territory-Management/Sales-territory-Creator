@@ -1,14 +1,28 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import base64
+import csv
+from io import StringIO
 from typing import List
 
 def load_data(file) -> pd.DataFrame:
-    """Load the CSV file."""
+    """Load the CSV file and handle rows with varying numbers of fields."""
     try:
-        # Read the CSV file directly into a DataFrame
-        df = pd.read_csv(file)
+        raw_data = file.read().decode('utf-8')
+        file.seek(0)
+        
+        # Use csv.reader to read the file
+        reader = csv.reader(StringIO(raw_data))
+        rows = list(reader)
+        
+        # Determine the maximum number of columns
+        max_columns = max(len(row) for row in rows)
+        
+        # Standardize row lengths by expanding each row to the maximum number of columns
+        standardized_rows = [row + [None] * (max_columns - len(row)) for row in rows]
+        
+        # Create a DataFrame using the standardized rows
+        df = pd.DataFrame(standardized_rows[1:], columns=standardized_rows[0])
         return df
     except Exception as e:
         st.error(f"Error loading the file: {str(e)}")
@@ -50,12 +64,13 @@ def calculate_metrics(territories: List[pd.DataFrame], balance_columns: List[str
         metric = {
             'Territory': i + 1,
             'Total Clients': len(territory),
-            'Resiliations': territory['Dt resiliation contrat all'].notna().sum()
+            'Resiliations': territory['Dt resiliation contrat all'].notna().sum() if 'Dt resiliation contrat all' in territory else 0
         }
         
         for col in balance_columns:
-            metric[f'{col} Total'] = territory[col].sum()
-            metric[f'{col} Average'] = territory[col].mean()
+            if col in territory:
+                metric[f'{col} Total'] = territory[col].sum()
+                metric[f'{col} Average'] = territory[col].mean()
         metrics.append(metric)
     
     return pd.DataFrame(metrics)
