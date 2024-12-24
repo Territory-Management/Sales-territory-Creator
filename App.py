@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import chardet
 from typing import List, Optional, Dict, Any, Tuple
 import logging
 from dataclasses import dataclass
