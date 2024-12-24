@@ -75,8 +75,8 @@ class TerritoryOptimizer:
                 territory_sums[(col,j)] = lpSum(values[i] * x[i,j] 
                                               for i in range(n_clients))
         
-        # Objective function: minimize variance
-        prob += lpSum((territory_sums[(col,j)] - targets[col])**2 
+        # Objective function: minimize total deviation from target
+        prob += lpSum(abs(territory_sums[(col,j)] - targets[col]) 
                      for col in balance_columns 
                      for j in range(self.num_territories))
         
