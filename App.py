@@ -3,167 +3,257 @@ import pandas as pd
 import numpy as np
 import base64
 import chardet
-from typing import List, Optional
+import plotly.express as px
+import plotly.graph_objs as go
+from typing import List, Optional, Dict, Any
 
-def load_data(file) -> Optional[pd.DataFrame]:
-    """Charge le fichier CSV en détectant l'encodage et gère les erreurs"""
-    try:
-        # Détection de l'encodage
-        raw_data = file.read()
-        file.seek(0)
-        encoding = chardet.detect(raw_data)['encoding']
+# Machine Learning and Advanced Analytics
+from sklearn.preprocessing import StandardScaler
+from sklearn.cluster import KMeans
+from scipy.stats import entropy
+import numba
+
+class TerritoryBalancer:
+    def __init__(self, df: pd.DataFrame):
+        """
+        Initialize the Territory Balancer with comprehensive features
+        """
+        self.original_df = df.copy()
+        self.df = df.copy()
+        self.num_territories = 2
+        self.balance_columns = []
+        self.constraints = []
         
-        # Lecture du CSV avec l'encodage détecté
-        df = pd.read_csv(file, encoding=encoding, engine='python', sep=None)
-        return df
-    except Exception as e:
-        st.error(f"Erreur lors du chargement du fichier : {str(e)}")
-        return None
-
-def normalize_numeric_column(series: pd.Series) -> pd.Series:
-    """Normalise les colonnes avec des symboles monétaires et des caractères non numériques"""
-    return pd.to_numeric(
-        series.astype(str).str.replace(r'[\u20ac$\u00a3,]', '', regex=True).str.replace(',', '.').str.strip(),
-        errors='coerce'
-    )
-
-def create_balanced_territories(
-    df: pd.DataFrame,
-    num_territories: int,
-    balance_columns: List[str],
-    years: Optional[List[int]] = None
-) -> tuple[List[pd.DataFrame], pd.DataFrame]:
-    """
-    Crée des territoires équilibrés en utilisant une approche gloutonne améliorée
-    
-    Args:
-    - df: DataFrame source
-    - num_territories: Nombre de territoires à créer
-    - balance_columns: Colonnes à utiliser pour l'équilibrage
-    - years: Années de résiliation à filtrer (optionnel)
-    
-    Returns:
-    - Liste des territoires
-    - DataFrame des métriques des territoires
-    """
-    # Créer une copie de travail du DataFrame
-    working_df = df.copy()
-
-    # Filtrer par années de résiliation si spécifiées
-    if years:
-        working_df['Dt resiliation contrat all'] = pd.to_datetime(working_df['Dt resiliation contrat all'], errors='coerce')
-        working_df = working_df[~working_df['Dt resiliation contrat all'].dt.year.isin(years)]
-
-    # Normaliser les colonnes numériques
-    for col in balance_columns:
-        working_df[col] = normalize_numeric_column(working_df[col])
-
-    # Calculer un score global pour chaque ligne
-    working_df['global_score'] = working_df[balance_columns].sum(axis=1)
-
-    # Trier par score global décroissant
-    working_df = working_df.sort_values('global_score', ascending=False)
-
-    # Initialiser les territoires
-    territories = [[] for _ in range(num_territories)]
-    territory_totals = [0] * num_territories
-
-    # Algorithme de répartition gloutonne
-    for _, row in working_df.iterrows():
-        # Trouver le territoire avec le total le plus bas
-        min_territory_index = territory_totals.index(min(territory_totals))
+    def preprocess_data(self, balance_columns: List[str]):
+        """
+        Advanced data preprocessing
+        """
+        # Normalize and handle different data types
+        self.balance_columns = balance_columns
+        processed_df = self.df.copy()
         
-        # Ajouter la ligne au territoire avec le total le plus bas
-        territories[min_territory_index].append(row)
-        
-        # Mettre à jour le total de ce territoire
-        territory_totals[min_territory_index] += row['global_score']
-
-    # Convertir les territoires en DataFrames
-    territory_dfs = [pd.DataFrame(territory) for territory in territories]
-
-    # Ajouter une colonne "Territory"
-    for i, territory in enumerate(territory_dfs):
-        territory['Territory'] = i + 1
-
-    # Calculer les métriques
-    metrics = []
-    for i, territory in enumerate(territory_dfs):
-        metric = {'Territory': i + 1, 'Count': len(territory)}
         for col in balance_columns:
-            metric[f'{col}_total'] = territory[col].sum()
-            metric[f'{col}_mean'] = territory[col].mean()
-        metrics.append(metric)
-
-    return territory_dfs, pd.DataFrame(metrics)
-
-def get_download_link(df: pd.DataFrame, filename: str) -> str:
-    """Génère un lien de téléchargement CSV"""
-    csv = df.to_csv(index=False)
-    b64 = base64.b64encode(csv.encode()).decode()
-    return f'<a href="data:file/csv;base64,{b64}" download="{filename}">Télécharger {filename}</a>'
+            # Handle different numeric formats
+            processed_df[col] = pd.to_numeric(
+                processed_df[col].astype(str)
+                .str.replace(r'[€$£,]', '', regex=True)
+                .str.replace(',', '.'),
+                errors='coerce'
+            )
+        
+        # Remove rows with NaN in balance columns
+        processed_df.dropna(subset=balance_columns, inplace=True)
+        
+        # Standardize features
+        scaler = StandardScaler()
+        processed_columns = scaler.fit_transform(processed_df[balance_columns])
+        
+        return processed_df, processed_columns
+    
+    def advanced_distribution_strategy(
+        self, 
+        processed_df: pd.DataFrame, 
+        processed_columns: np.ndarray
+    ) -> List[pd.DataFrame]:
+        """
+        Multi-strategy territory distribution
+        """
+        # Hybrid approach combining multiple strategies
+        territories = []
+        
+        # K-Means Clustering
+        kmeans = KMeans(n_clusters=self.num_territories, random_state=42)
+        cluster_labels = kmeans.fit_predict(processed_columns)
+        processed_df['Cluster'] = cluster_labels
+        
+        # Entropy-based refinement
+        for cluster in range(self.num_territories):
+            cluster_data = processed_df[processed_df['Cluster'] == cluster]
+            
+            # Entropy sorting
+            cluster_data['entropy_score'] = cluster_data[self.balance_columns].apply(
+                lambda row: entropy(row), axis=1
+            )
+            
+            # Sort and distribute
+            sorted_cluster = cluster_data.sort_values('entropy_score', ascending=False)
+            territories.append(sorted_cluster)
+        
+        return territories
+    
+    def validate_territories(self, territories: List[pd.DataFrame]) -> bool:
+        """
+        Validate territory distribution
+        """
+        metrics = []
+        for i, territory in enumerate(territories):
+            territory_metrics = {
+                'Territory': i + 1,
+                'Total Clients': len(territory)
+            }
+            
+            for col in self.balance_columns:
+                territory_metrics[f'{col}_Total'] = territory[col].sum()
+                territory_metrics[f'{col}_Mean'] = territory[col].mean()
+            
+            metrics.append(territory_metrics)
+        
+        # Check distribution balance
+        df_metrics = pd.DataFrame(metrics)
+        variation_threshold = 0.2  # 20% variation allowed
+        
+        for col in self.balance_columns:
+            total_col = f'{col}_Total'
+            mean = df_metrics[total_col].mean()
+            max_allowed = mean * (1 + variation_threshold)
+            min_allowed = mean * (1 - variation_threshold)
+            
+            if any((df_metrics[total_col] > max_allowed) | 
+                   (df_metrics[total_col] < min_allowed)):
+                return False
+        
+        return True
+    
+    def visualize_territories(self, territories: List[pd.DataFrame]):
+        """
+        Create comprehensive territory visualization
+        """
+        metrics = []
+        for i, territory in enumerate(territories):
+            territory_metrics = {
+                'Territory': i + 1,
+                'Total Clients': len(territory)
+            }
+            
+            for col in self.balance_columns:
+                territory_metrics[f'{col}_Total'] = territory[col].sum()
+                territory_metrics[f'{col}_Mean'] = territory[col].mean()
+            
+            metrics.append(territory_metrics)
+        
+        df_metrics = pd.DataFrame(metrics)
+        
+        # Plotly visualizations
+        fig1 = px.bar(
+            df_metrics, 
+            x='Territory', 
+            y='Total Clients', 
+            title='Clients per Territory'
+        )
+        
+        fig2 = go.Figure()
+        for col in self.balance_columns:
+            fig2.add_trace(go.Bar(
+                x=df_metrics['Territory'],
+                y=df_metrics[f'{col}_Total'],
+                name=f'{col} Total'
+            ))
+        fig2.update_layout(title='Total Values per Territory')
+        
+        return fig1, fig2
 
 def main():
-    st.title('Équilibreur de Territoires Avancé')
-
-    uploaded_file = st.file_uploader("Téléchargez un fichier CSV", type="csv")
+    st.title('Advanced Territory Balancer 🌐')
+    
+    # File Upload
+    uploaded_file = st.file_uploader(
+        "Upload CSV File", 
+        type=['csv'], 
+        help="Upload your client data CSV file"
+    )
+    
     if uploaded_file:
-        df = load_data(uploaded_file)
-
-        if df is not None:
-            st.write("Aperçu des données :", df.head())
-            st.write("Colonnes disponibles :", df.columns.tolist())
-
-            # Sélectionner les colonnes à équilibrer
-            balance_columns = st.multiselect(
-                "Sélectionner les colonnes à équilibrer",
-                options=df.columns.tolist(),
-                default=df.columns.tolist()[:1]
-            )
-
+        # Load and detect encoding
+        try:
+            raw_data = uploaded_file.read()
+            uploaded_file.seek(0)
+            encoding = chardet.detect(raw_data)['encoding']
+            
+            df = pd.read_csv(uploaded_file, encoding=encoding)
+            st.success(f"File loaded successfully with {encoding} encoding")
+        except Exception as e:
+            st.error(f"Error loading file: {e}")
+            return
+        
+        # Display basic data info
+        st.write("Data Overview")
+        st.dataframe(df.head())
+        
+        # Columns selection
+        balance_columns = st.multiselect(
+            "Select Columns for Territory Balancing",
+            options=df.select_dtypes(include=[np.number]).columns.tolist()
+        )
+        
+        # Territory count
+        num_territories = st.slider(
+            "Number of Territories", 
+            min_value=2, 
+            max_value=10, 
+            value=3
+        )
+        
+        # Advanced Options
+        with st.expander("Advanced Configuration"):
+            st.write("Fine-tune Territory Distribution")
+            
+            # Variation Tolerance
+            variation_tolerance = st.slider(
+                "Variation Tolerance (%)", 
+                min_value=5, 
+                max_value=50, 
+                value=20
+            ) / 100
+        
+        # Distribution Button
+        if st.button("Create Territories"):
             if not balance_columns:
-                st.error("Veuillez sélectionner au moins une colonne à équilibrer")
+                st.warning("Please select at least one numeric column")
                 return
-
-            # Interface pour entrer le nombre de territoires
-            num_territories = st.number_input(
-                "Nombre de territoires", min_value=2, max_value=len(df), value=2
+            
+            # Initialize Balancer
+            balancer = TerritoryBalancer(df)
+            balancer.num_territories = num_territories
+            
+            # Preprocess Data
+            processed_df, processed_columns = balancer.preprocess_data(balance_columns)
+            
+            # Distribute Territories
+            territories = balancer.advanced_distribution_strategy(
+                processed_df, 
+                processed_columns
             )
-
-            # Sélectionner plusieurs années de résiliation pour filtrer
-            years = st.multiselect(
-                "Sélectionner les années de résiliation à exclure",
-                options=[2024, 2025, 2026],
-                default=[]
-            )
-
-            # Créer les territoires lorsque l'utilisateur clique sur le bouton
-            if st.button("Créer les territoires"):
-                territories, metrics = create_balanced_territories(
-                    df, num_territories, balance_columns, years
-                )
-
-                # Afficher les métriques des territoires
-                st.subheader("Métriques des territoires")
-                st.dataframe(metrics)
-
-                # Fusionner tous les territoires en un seul DataFrame avec leur numéro de territoire
-                combined_territories = pd.concat(territories, ignore_index=True)
-
-                # Lien pour télécharger le fichier combiné
-                st.markdown(
-                    get_download_link(combined_territories, "repartition_territoires.csv"),
-                    unsafe_allow_html=True
-                )
-
-                # Afficher les territoires avec des liens de téléchargement
-                for i, territory in enumerate(territories):
-                    with st.expander(f"Territoire {i+1} ({len(territory)} comptes)"):
-                        st.write(territory)
-                        st.markdown(
-                            get_download_link(territory, f"territoire_{i+1}.csv"),
-                            unsafe_allow_html=True
+            
+            # Validate Territories
+            is_valid = balancer.validate_territories(territories)
+            
+            if is_valid:
+                st.success("Territories created successfully!")
+                
+                # Visualizations
+                fig1, fig2 = balancer.visualize_territories(territories)
+                
+                col1, col2 = st.columns(2)
+                with col1:
+                    st.plotly_chart(fig1)
+                with col2:
+                    st.plotly_chart(fig2)
+                
+                # Download Options
+                for i, territory in enumerate(territories, 1):
+                    with st.expander(f"Territory {i} Details"):
+                        st.dataframe(territory)
+                        
+                        # Download CSV
+                        csv = territory.to_csv(index=False)
+                        st.download_button(
+                            label=f"Download Territory {i} CSV",
+                            data=csv,
+                            file_name=f'territory_{i}.csv',
+                            mime='text/csv'
                         )
+            else:
+                st.warning("Could not create balanced territories. Try adjusting parameters.")
 
 if __name__ == "__main__":
     main()
