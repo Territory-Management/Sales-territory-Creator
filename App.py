@@ -5,6 +5,7 @@ import base64
 import logging
 import re
 from typing import List, Optional
+from datetime import datetime
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -40,19 +41,19 @@ def load_data(file) -> Optional[pd.DataFrame]:
         st.error(f"Error loading file: {str(e)}")
         return None
 
-def distribute_territories(df: pd.DataFrame, num_territories: int, balance_columns: List[str], years: Optional[List[int]] = None) -> List[pd.DataFrame]:
+def distribute_territories(df: pd.DataFrame, num_territories: int, balance_columns: List[str]) -> List[pd.DataFrame]:
+    current_year = datetime.now().year
+    next_year = current_year + 1
+
     territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
     
     df['Dt resiliation contrat all'] = pd.to_datetime(df['Dt resiliation contrat all'], errors='coerce')
     
-    if years:
-        termination_clients = df[df['Dt resiliation contrat all'].dt.year.isin(years)]
-        regular_data = df[~df['Dt resiliation contrat all'].dt.year.isin(years)]
-    else:
-        termination_clients = pd.DataFrame()
-        regular_data = df.copy()
+    # Select termination clients for this year and next year
+    termination_clients = df[df['Dt resiliation contrat all'].dt.year.isin([current_year, next_year])]
+    regular_data = df[~df.index.isin(termination_clients.index)]
     
-    logging.info(f"Total termination clients found: {len(termination_clients)}")
+    logging.info(f"Total termination clients for {current_year} and {next_year} found: {len(termination_clients)}")
 
     # Distribute regular data (including termination clients not in selected years)
     regular_data['_total'] = regular_data.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
@@ -134,15 +135,9 @@ def main():
                 max_value=len(df),
                 value=2
             )
-            
-            years = st.multiselect(
-                "Select termination years",
-                options=[2024, 2025, 2026],
-                default=[2024]
-            )
 
             if st.button("Create Territories"):
-                territories = distribute_territories(df, num_territories, balance_columns, years)
+                territories = distribute_territories(df, num_territories, balance_columns)
                 metrics = get_territory_metrics(territories, balance_columns)
                 
                 st.subheader("Territory Metrics")
