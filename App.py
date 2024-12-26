@@ -5,6 +5,7 @@ import logging
 import re
 from typing import List, Optional
 from datetime import datetime
+import numpy as np
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -57,37 +58,27 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
 
     # Calculate total values for balancing columns
-    df["_total"] = df.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
+    df["_total"] = df[balance_columns].applymap(clean_numeric_value).sum(axis=1)
 
     # Shuffle and sort by total value
     df_sorted = df.sample(frac=1, random_state=42).sort_values("_total", ascending=False).reset_index(drop=True)
 
-    territory_sums = [0.0] * num_territories
-    territory_counts = [0] * num_territories
+    territory_sums = np.zeros(num_territories)
+    territory_counts = np.zeros(num_territories)
 
-    # Initial equal distribution pass
+    # Assign rows to territories in a balanced way
     for idx, row in df_sorted.iterrows():
-        min_idx = idx % num_territories
-        territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([row])], ignore_index=True)
+        # Calculate a composite score for each territory, dynamically adjusting weights
+        weight_count = 0.7 if idx < len(df_sorted) * 0.3 else 0.5
+        weight_sum = 1 - weight_count
+        min_idx = np.argmin(territory_counts * weight_count + territory_sums * weight_sum)
+        territories[min_idx] = territories[min_idx].append(row, ignore_index=True)
         territory_counts[min_idx] += 1
         territory_sums[min_idx] += row["_total"]
 
-    # Fine-grained balancing
-    for _ in range(10):  # Arbitrary number of iterations for fine-tuning
-        for idx, row in df_sorted.iterrows():
-            # Calculate a composite score for each territory, dynamically adjusting weights
-            weight_count = 0.8 if idx < len(df_sorted) * 0.2 else 0.5
-            weight_sum = 1 - weight_count
-            min_idx = min(range(num_territories), key=lambda i: (
-                territory_counts[i] * weight_count + territory_sums[i] * weight_sum  # Dynamic balance
-            ))
-            territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([row])], ignore_index=True)
-            territory_counts[min_idx] += 1
-            territory_sums[min_idx] += row["_total"]
-
     # Remove the helper '_total' column
     for i in range(num_territories):
-        territories[i] = territories[i].drop(columns=["_total"])
+        territories[i].drop(columns=["_total"], inplace=True)
         territories[i].insert(0, "Territory", i + 1)
 
     logging.info(f"Total territories created: {len(territories)}")
