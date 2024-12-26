@@ -47,11 +47,12 @@ def load_data(file) -> Optional[pd.DataFrame]:
 
 def distribute_territories(df: pd.DataFrame, num_territories: int, balance_columns: List[str]) -> List[pd.DataFrame]:
     """
-    Distribute rows to territories such that the total sum for the specified columns is balanced.
+    Distribute rows to territories, balancing both total sums and row counts.
     """
     # Initialize empty territories
     territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
     territory_sums = [0.0] * num_territories
+    territory_counts = [0] * num_territories
 
     # Calculate total values for the balance columns
     df['_total'] = df.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
@@ -59,12 +60,18 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     # Sort the dataframe by total value in descending order
     df_sorted = df.sort_values('_total', ascending=False)
 
-    # Greedy assignment to balance the total sums
+    # Hybrid assignment considering both sums and counts
     for _, row in df_sorted.iterrows():
-        # Find the territory with the smallest current sum
-        min_idx = min(range(num_territories), key=lambda i: territory_sums[i])
+        # Find the territory with the smallest adjusted load
+        min_idx = min(
+            range(num_territories),
+            key=lambda i: (
+                territory_sums[i] + 0.5 * (territory_counts[i] / (len(df) / num_territories))
+            )
+        )
         territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([row])], ignore_index=True)
         territory_sums[min_idx] += row['_total']
+        territory_counts[min_idx] += 1
 
     # Remove the temporary '_total' column from the final territories
     for i in range(num_territories):
@@ -73,8 +80,8 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
 
     # Log final distribution
     logging.info("Final Distribution of Territories:")
-    for idx, total in enumerate(territory_sums):
-        logging.info(f"Territory {idx + 1}: Total Sum = {total}, Row Count = {len(territories[idx])}")
+    for idx, (total, count) in enumerate(zip(territory_sums, territory_counts)):
+        logging.info(f"Territory {idx + 1}: Total Sum = {total}, Row Count = {count}")
 
     return territories
 
