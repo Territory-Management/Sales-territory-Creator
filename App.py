@@ -41,20 +41,11 @@ def load_data(file) -> Optional[pd.DataFrame]:
         return None
 
 def distribute_territories(df: pd.DataFrame, num_territories: int, balance_columns: List[str]) -> List[pd.DataFrame]:
-    current_year = datetime.now().year
-    next_year = current_year + 1
-
     territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
 
     df['Dt resiliation contrat all'] = pd.to_datetime(df['Dt resiliation contrat all'], errors='coerce')
 
-    # Select termination clients for this year and next year
-    termination_clients = df[df['Dt resiliation contrat all'].dt.year.isin([current_year, next_year])]
-    regular_data = df[~df.index.isin(termination_clients.index)]
-
-    logging.info(f"Total termination clients for {current_year} and {next_year} found: {len(termination_clients)}")
-
-    # Calculate total values for regular data
+    # Calculate total values for all data
     df['_total'] = df.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
 
     # Sort by total value
@@ -64,10 +55,12 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     territory_counts = [0] * num_territories
     grouped_rows = [[] for _ in range(num_territories)]
 
-    # Distribute data using a round-robin approach
-    for _, row in all_data_sorted.iterrows():
-        # Select the territory with the minimum combined total of count and value
-        min_idx = min(range(num_territories), key=lambda i: (territory_counts[i], territory_sums[i]))
+    # Distribute data using a more balanced approach
+    for idx, (_, row) in enumerate(all_data_sorted.iterrows()):
+        # Composite score: prioritize territories with lower total value and count
+        min_idx = min(range(num_territories), key=lambda i: (
+            territory_sums[i] + territory_counts[i] * (idx % 2 == 0)  # Alternate to spread high-value clients more evenly
+        ))
         grouped_rows[min_idx].append(row)
         territory_counts[min_idx] += 1
         territory_sums[min_idx] += row['_total']
