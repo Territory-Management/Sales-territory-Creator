@@ -65,17 +65,25 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     territory_sums = [0.0] * num_territories
     territory_counts = [0] * num_territories
 
-    # Assign rows to territories in a balanced way
+    # Initial equal distribution pass
     for idx, row in df_sorted.iterrows():
-        # Calculate a composite score for each territory, dynamically adjusting weights
-        weight_count = 0.7 if idx < len(df_sorted) * 0.3 else 0.5
-        weight_sum = 1 - weight_count
-        min_idx = min(range(num_territories), key=lambda i: (
-            territory_counts[i] * weight_count + territory_sums[i] * weight_sum  # Dynamic balance
-        ))
+        min_idx = idx % num_territories
         territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([row])], ignore_index=True)
         territory_counts[min_idx] += 1
         territory_sums[min_idx] += row["_total"]
+
+    # Fine-grained balancing
+    for _ in range(10):  # Arbitrary number of iterations for fine-tuning
+        for idx, row in df_sorted.iterrows():
+            # Calculate a composite score for each territory, dynamically adjusting weights
+            weight_count = 0.8 if idx < len(df_sorted) * 0.2 else 0.5
+            weight_sum = 1 - weight_count
+            min_idx = min(range(num_territories), key=lambda i: (
+                territory_counts[i] * weight_count + territory_sums[i] * weight_sum  # Dynamic balance
+            ))
+            territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([row])], ignore_index=True)
+            territory_counts[min_idx] += 1
+            territory_sums[min_idx] += row["_total"]
 
     # Remove the helper '_total' column
     for i in range(num_territories):
