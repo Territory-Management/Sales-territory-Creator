@@ -48,23 +48,33 @@ def normalize_numeric_column(series: pd.Series) -> pd.Series:
 
 def distribute_equally(df: pd.DataFrame, num_territories: int, balance_columns: List[str]) -> List[pd.DataFrame]:
     """Distribute rows equitably by count and sum of specified columns across territories."""
-    # Create a cost matrix for balancing
-    cost_matrix = []
-    for _, row in df.iterrows():
-        cost_row = []
-        for _ in range(num_territories):
-            cost_row.append(sum(abs(row[col]) for col in balance_columns))
-        cost_matrix.append(cost_row)
+    # Compute total sums for balancing
+    col_sums = df[balance_columns].sum()
+    target_sum = col_sums / num_territories
+    target_count = len(df) // num_territories
 
-    cost_matrix = np.array(cost_matrix)
+    # Initialize territories
+    territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
+    balances = [pd.Series(0, index=balance_columns) for _ in range(num_territories)]
 
-    # Solve assignment problem
-    row_ind, col_ind = linear_sum_assignment(cost_matrix)
+    # Sort rows by descending sum of balance columns
+    sorted_df = df.sort_values(balance_columns, ascending=False)
 
     # Assign rows to territories
-    territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
-    for i, j in zip(row_ind, col_ind):
-        territories[j] = pd.concat([territories[j], pd.DataFrame([df.iloc[i]])], ignore_index=True)
+    for _, row in sorted_df.iterrows():
+        best_fit = None
+        smallest_diff = float('inf')
+
+        for i, balance in enumerate(balances):
+            projected_balance = balance + row[balance_columns]
+            projected_diff = ((projected_balance - target_sum) ** 2).sum()
+
+            if len(territories[i]) < target_count or projected_diff < smallest_diff:
+                best_fit = i
+                smallest_diff = projected_diff
+
+        territories[best_fit] = pd.concat([territories[best_fit], pd.DataFrame([row])], ignore_index=True)
+        balances[best_fit] += row[balance_columns]
 
     return territories
 
