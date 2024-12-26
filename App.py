@@ -5,6 +5,7 @@ import logging
 import re
 from typing import List, Optional
 from datetime import datetime
+import random
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -45,20 +46,20 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     next_year = current_year + 1
 
     territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
-    
+
     df['Dt resiliation contrat all'] = pd.to_datetime(df['Dt resiliation contrat all'], errors='coerce')
-    
+
     # Select termination clients for this year and next year
     termination_clients = df[df['Dt resiliation contrat all'].dt.year.isin([current_year, next_year])]
     regular_data = df[~df.index.isin(termination_clients.index)]
-    
+
     logging.info(f"Total termination clients for {current_year} and {next_year} found: {len(termination_clients)}")
 
     # Calculate total values for regular data
     regular_data['_total'] = regular_data.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
 
-    # Distribute regular data
-    regular_data_sorted = regular_data.sort_values('_total', ascending=False)
+    # Randomize start to prevent bias towards the first territory
+    regular_data_sorted = regular_data.sample(frac=1).sort_values('_total', ascending=False)
 
     territory_sums = [0.0] * num_territories
     territory_counts = [0] * num_territories
@@ -78,7 +79,7 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     if not termination_clients.empty:
         termination_clients['_total'] = termination_clients.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
         termination_clients_sorted = termination_clients.sort_values('_total', ascending=False)
-        
+
         for _, client in termination_clients_sorted.iterrows():
             min_idx = min(range(num_territories), key=lambda i: (territory_counts[i], territory_sums[i]))
             territories[min_idx] = pd.concat(
@@ -87,7 +88,7 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
             )
             territory_counts[min_idx] += 1
             territory_sums[min_idx] += client['_total']
-    
+
     logging.info(f"Total territories created: {len(territories)}")
     for idx, territory in enumerate(territories):
         logging.info(f"Territory {idx + 1}: {len(territory)} accounts")
@@ -114,25 +115,25 @@ def get_download_link(df: pd.DataFrame, filename: str) -> str:
 
 def main():
     st.title('Territory Distribution Tool')
-    
+
     uploaded_file = st.file_uploader("Upload CSV file", type="csv")
     if uploaded_file:
         df = load_data(uploaded_file)
-        
+
         if df is not None:
             st.write("Data Preview:", df.head())
             st.write("Column names:", df.columns.tolist())
-            
+
             balance_columns = st.multiselect(
                 "Select columns to balance",
                 options=[col for col in df.columns if col != 'Code client' and col != 'Dt resiliation contrat all'],
                 default=[col for col in df.columns if col != 'Code client' and col != 'Dt resiliation contrat all'][:1]
             )
-            
+
             if not balance_columns:
                 st.error("Please select at least one column to balance")
                 return
-            
+
             num_territories = st.number_input(
                 "Number of territories",
                 min_value=2,
@@ -143,13 +144,13 @@ def main():
             if st.button("Create Territories"):
                 territories = distribute_territories(df, num_territories, balance_columns)
                 metrics = get_territory_metrics(territories, balance_columns)
-                
+
                 st.subheader("Territory Metrics")
                 st.write(metrics)
-                
+
                 combined = pd.concat(territories, ignore_index=True)
                 st.markdown(get_download_link(combined, "all_territories.csv"), unsafe_allow_html=True)
-                
+
                 for i, territory in enumerate(territories):
                     with st.expander(f"Territory {i+1} ({len(territory)} accounts)"):
                         st.write(territory)
