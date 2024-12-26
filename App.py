@@ -50,19 +50,20 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     else:
         termination_clients = pd.DataFrame()
 
-    # Calculate total values for sorting
-    df['_total'] = df.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
+    totals = []
+    for _, row in df.iterrows():
+        total = sum(clean_numeric_value(row[col]) for col in balance_columns)
+        totals.append(total)
 
-    # Sort by total descending
-    df_sorted = df.sort_values('_total', ascending=False).drop('_total', axis=1)
-    
-    # Initialize sums and counts
+    df_sorted = df.copy()
+    df_sorted['_total'] = totals
+    df_sorted = df_sorted.sort_values('_total', ascending=False).drop('_total', axis=1)
+
     territory_sums = [0.0] * num_territories
     territory_counts = [0] * num_territories
 
-    # Distribute using a round-robin approach
     for _, row in df_sorted.iterrows():
-        # Find the territory with the minimum total value
+        # Choose territory with the smallest sum and then by count
         min_idx = min(range(num_territories), key=lambda i: (territory_sums[i], territory_counts[i]))
         territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([row])], ignore_index=True)
         territory_counts[min_idx] += 1
