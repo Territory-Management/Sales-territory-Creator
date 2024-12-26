@@ -4,7 +4,6 @@ import numpy as np
 import base64
 import logging
 from typing import List, Optional
-from scipy.optimize import linear_sum_assignment
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -39,6 +38,7 @@ def load_data(file) -> Optional[pd.DataFrame]:
     # Vérification de l'en-tête
     if df.columns[0].startswith("Unnamed:"):
         logging.warning("First column appears unnamed. Treating as an index column.")
+        file.seek(0)
         df = pd.read_csv(file, encoding=DEFAULT_ENCODING, engine='python', sep=None, index_col=0)
 
     # Vérifie si toutes les colonnes attendues sont correctement lues
@@ -93,7 +93,6 @@ def create_territories(
     df: pd.DataFrame,
     num_territories: int,
     balance_columns: List[str],
-    weights: Optional[List[float]] = None,
     years: Optional[List[int]] = None
 ) -> tuple[List[pd.DataFrame], pd.DataFrame]:
     """Create balanced territories with adjustments for disparities."""
@@ -173,7 +172,7 @@ def main():
             if st.button("Create Territories"):
                 with st.spinner("Creating territories..."):
                     territories, metrics = create_territories(
-                        df, num_territories, balance_columns, None, years
+                        df, num_territories, balance_columns, years
                     )
 
                 st.subheader("Territory Metrics")
