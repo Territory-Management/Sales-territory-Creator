@@ -63,11 +63,10 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     territory_counts = [0] * num_territories
     grouped_rows = [[] for _ in range(num_territories)]
 
-    for _, row in all_data_sorted.iterrows():
-        # Calculate the target number of rows per territory and target total sum per territory
-        target_count = len(df) / num_territories
-        target_sums = [sum(clean_numeric_value(row[col]) for _, row in df.iterrows()) / num_territories for col in balance_columns]
+    target_count = len(df) / num_territories
+    target_sums = [sum(clean_numeric_value(row[col]) for _, row in df.iterrows()) / num_territories for col in balance_columns]
 
+    for _, row in all_data_sorted.iterrows():
         min_idx = min(range(num_territories), key=lambda i: (
             abs(territory_counts[i] - target_count) + 
             sum(abs(territory_sums[i] - target_sums[j]) / target_sums[j] for j in range(len(balance_columns)))
