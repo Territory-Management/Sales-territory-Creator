@@ -1,6 +1,5 @@
 import streamlit as st
 import pandas as pd
-import numpy as np
 import base64
 import logging
 import re
@@ -64,7 +63,7 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     grouped_rows = [[] for _ in range(num_territories)]
 
     for _, row in regular_data_sorted.iterrows():
-        min_idx = min(range(num_territories), key=lambda i: (territory_sums[i], territory_counts[i]))
+        min_idx = min(range(num_territories), key=lambda i: (territory_counts[i], territory_sums[i]))
         grouped_rows[min_idx].append(row)
         territory_counts[min_idx] += 1
         territory_sums[min_idx] += sum(clean_numeric_value(row[col]) for col in balance_columns)
@@ -75,14 +74,16 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
 
     # Distribute selected termination clients equally across territories
     if not termination_clients.empty:
-        termination_clients['_total'] = termination_clients.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
-        termination_clients_sorted = termination_clients.sort_values('_total', ascending=False).drop('_total', axis=1)
+        termination_clients_sorted = termination_clients.sample(frac=1).reset_index(drop=True)
         
-        for i, client in enumerate(termination_clients_sorted.itertuples(index=False)):
-            territories[i % num_territories] = pd.concat(
-                [territories[i % num_territories], pd.DataFrame([client._asdict()])],
+        for i, client in termination_clients_sorted.iterrows():
+            min_idx = min(range(num_territories), key=lambda i: (territory_counts[i], territory_sums[i]))
+            territories[min_idx] = pd.concat(
+                [territories[min_idx], pd.DataFrame([client])],
                 ignore_index=True
             )
+            territory_counts[min_idx] += 1
+            territory_sums[min_idx] += sum(clean_numeric_value(client[col]) for col in balance_columns)
     
     logging.info(f"Total territories created: {len(territories)}")
     for idx, territory in enumerate(territories):
