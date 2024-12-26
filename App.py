@@ -50,24 +50,23 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     else:
         termination_clients = pd.DataFrame()
 
-    totals = []
-    for _, row in df.iterrows():
-        total = sum(clean_numeric_value(row[col]) for col in balance_columns)
-        totals.append(total)
-
-    df_sorted = df.copy()
-    df_sorted['_total'] = totals
-    df_sorted = df_sorted.sort_values('_total', ascending=False).drop('_total', axis=1)
+    df['_total'] = df.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
+    df_sorted = df.sort_values('_total', ascending=False).drop('_total', axis=1)
 
     territory_sums = [0.0] * num_territories
     territory_counts = [0] * num_territories
 
+    grouped_rows = [[] for _ in range(num_territories)]
+
     for _, row in df_sorted.iterrows():
-        # Choose territory with the smallest sum and then by count
         min_idx = min(range(num_territories), key=lambda i: (territory_sums[i], territory_counts[i]))
-        territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([row])], ignore_index=True)
+        grouped_rows[min_idx].append(row)
         territory_counts[min_idx] += 1
         territory_sums[min_idx] += sum(clean_numeric_value(row[col]) for col in balance_columns)
+
+    for i, territory_rows in enumerate(grouped_rows):
+        territories[i] = pd.DataFrame(territory_rows)
+        territories[i].insert(0, 'Territory', i + 1)
 
     if not termination_clients.empty:
         for i, client in enumerate(termination_clients.itertuples(index=False)):
@@ -75,10 +74,6 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
                 [territories[i % len(territories)], pd.DataFrame([client._asdict()])],
                 ignore_index=True
             )
-    
-    # Add Territory number as the first column
-    for i, territory in enumerate(territories):
-        territory.insert(0, 'Territory', i + 1)
     
     return territories
 
@@ -90,7 +85,7 @@ def get_territory_metrics(territories: List[pd.DataFrame], balance_columns: List
             'Count': len(territory)
         }
         for col in balance_columns:
-            total = sum(clean_numeric_value(row[col]) for _, row in territory.iterrows())
+            total = territory[col].apply(clean_numeric_value).sum()
             metric[f'{col}_total'] = total
         metrics.append(metric)
     return pd.DataFrame(metrics)
