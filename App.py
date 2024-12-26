@@ -46,26 +46,33 @@ def normalize_numeric_column(series: pd.Series) -> pd.Series:
     )
 
 def distribute_equally_by_count_and_sum(df: pd.DataFrame, num_territories: int, balance_columns: List[str]) -> List[pd.DataFrame]:
-    """Distribute rows equally by count and sum of specified columns across territories."""
+    """Distribute rows equitably by count and sum of specified columns across territories."""
+    # Initialize empty territories
     territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
-    sorted_df = df.sort_values(balance_columns, ascending=False)
+    
+    # Calculate targets for balancing
+    total_rows = len(df)
+    total_sums = df[balance_columns].sum()
+    target_count = total_rows // num_territories
+    target_sums = total_sums / num_territories
 
-    for _, row in sorted_df.iterrows():
-        min_index = min(
+    # Sort by balance columns and distribute
+    for _, row in df.iterrows():
+        best_index = min(
             range(num_territories),
             key=lambda i: (
-                len(territories[i]),
-                -territories[i][balance_columns].sum().sum()
+                abs(len(territories[i]) - target_count),
+                sum(abs(territories[i][col].sum() + row[col] - target_sums[col]) for col in balance_columns)
             )
         )
-        territories[min_index] = pd.concat([territories[min_index], pd.DataFrame([row])], ignore_index=True)
+        territories[best_index] = pd.concat([territories[best_index], pd.DataFrame([row])], ignore_index=True)
 
     return territories
 
 def distribute_termination_clients_by_year(
     territories: List[pd.DataFrame], termination_clients: pd.DataFrame, years: List[int]
 ) -> List[pd.DataFrame]:
-    """Distribute termination clients equally among territories for each year."""
+    """Distribute termination clients equitably among territories for each year."""
     for year in years:
         year_clients = termination_clients[
             termination_clients['Dt resiliation contrat all'].dt.year == year
