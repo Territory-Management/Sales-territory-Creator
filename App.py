@@ -47,6 +47,8 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
         df['Dt resiliation contrat all'] = pd.to_datetime(df['Dt resiliation contrat all'], errors='coerce')
         termination_clients = df[df['Dt resiliation contrat all'].dt.year.isin(years)]
         df = df[~df['Dt resiliation contrat all'].dt.year.isin(years)]
+        
+        logging.info(f"Total termination clients found: {len(termination_clients)}")
     else:
         termination_clients = pd.DataFrame()
 
@@ -68,7 +70,6 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
         territories[i].insert(0, 'Territory', i + 1)
 
     if not termination_clients.empty:
-        # Re-sort termination clients by their total balance value
         termination_clients['_total'] = termination_clients.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
         termination_clients_sorted = termination_clients.sort_values('_total', ascending=False).drop('_total', axis=1)
         
@@ -77,6 +78,10 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
             territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([client])], ignore_index=True)
             territory_counts[min_idx] += 1
             territory_sums[min_idx] += sum(clean_numeric_value(client[col]) for col in balance_columns)
+
+    logging.info(f"Total territories created: {len(territories)}")
+    for idx, territory in enumerate(territories):
+        logging.info(f"Territory {idx + 1}: {len(territory)} accounts")
 
     return territories
 
