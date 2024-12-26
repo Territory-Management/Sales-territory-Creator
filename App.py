@@ -63,7 +63,7 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     grouped_rows = [[] for _ in range(num_territories)]
 
     for _, row in regular_data_sorted.iterrows():
-        min_idx = min(range(num_territories), key=lambda i: (territory_counts[i], territory_sums[i]))
+        min_idx = min(range(num_territories), key=lambda i: (territory_sums[i], territory_counts[i]))
         grouped_rows[min_idx].append(row)
         territory_counts[min_idx] += 1
         territory_sums[min_idx] += sum(clean_numeric_value(row[col]) for col in balance_columns)
@@ -72,12 +72,13 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
         territories[i] = pd.DataFrame(territory_rows)
         territories[i].insert(0, 'Territory', i + 1)
 
-    # Distribute selected termination clients equally across territories
+    # Distribute selected termination clients
     if not termination_clients.empty:
-        termination_clients_sorted = termination_clients.sample(frac=1).reset_index(drop=True)
+        termination_clients['_total'] = termination_clients.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
+        termination_clients_sorted = termination_clients.sort_values('_total', ascending=False).drop('_total', axis=1)
         
-        for i, client in termination_clients_sorted.iterrows():
-            min_idx = min(range(num_territories), key=lambda i: (territory_counts[i], territory_sums[i]))
+        for _, client in termination_clients_sorted.iterrows():
+            min_idx = min(range(num_territories), key=lambda i: (territory_sums[i], territory_counts[i]))
             territories[min_idx] = pd.concat(
                 [territories[min_idx], pd.DataFrame([client])],
                 ignore_index=True
