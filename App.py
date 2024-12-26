@@ -49,7 +49,7 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     """
     Distribute rows to territories, balancing both total sums and row counts.
     """
-    # Initialize empty territories
+    # Initialize territories
     territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
     territory_sums = [0.0] * num_territories
     territory_counts = [0] * num_territories
@@ -57,25 +57,26 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     # Calculate total values for the balance columns
     df['_total'] = df.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
 
-    # Sort the dataframe by total value in descending order
+    # Sort rows by total value in descending order
     df_sorted = df.sort_values('_total', ascending=False)
 
-    # Hybrid assignment considering both sums and counts
+    # Assign rows iteratively
     for _, row in df_sorted.iterrows():
-        # Find the territory with the smallest adjusted load
-        min_idx = min(
-            range(num_territories),
-            key=lambda i: (
-                territory_sums[i] + 0.5 * (territory_counts[i] / (len(df) / num_territories))
-            )
-        )
+        # Calculate imbalance score for each territory
+        scores = [
+            (territory_sums[i] + row['_total']) - (sum(territory_sums) / num_territories)
+            + abs(territory_counts[i] + 1 - (len(df) / num_territories))
+            for i in range(num_territories)
+        ]
+        # Assign row to the territory with the lowest score
+        min_idx = scores.index(min(scores))
         territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([row])], ignore_index=True)
         territory_sums[min_idx] += row['_total']
         territory_counts[min_idx] += 1
 
-    # Remove the temporary '_total' column from the final territories
+    # Clean up temporary '_total' column and add Territory identifier
     for i in range(num_territories):
-        territories[i] = territories[i].drop(columns='_total')
+        territories[i] = territories[i].drop(columns=['_total'])
         territories[i].insert(0, 'Territory', i + 1)
 
     # Log final distribution
