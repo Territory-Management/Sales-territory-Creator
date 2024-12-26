@@ -53,21 +53,20 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
 
     territory_sums = [0.0] * num_territories
     territory_counts = [0] * num_territories
-    grouped_rows = [[] for _ in range(num_territories)]
 
-    # Distribute data using a more balanced approach
-    for idx, (_, row) in enumerate(all_data_sorted.iterrows()):
-        # Composite score: prioritize territories with lower total value and count
+    # Distribute data using a round-robin approach with balancing
+    for _, row in all_data_sorted.iterrows():
+        # Determine the best territory based on both count and total value
         min_idx = min(range(num_territories), key=lambda i: (
-            territory_sums[i] + territory_counts[i] * (idx % 2 == 0)  # Alternate to spread high-value clients more evenly
+            territory_counts[i] + territory_sums[i] / max(1, sum(territory_sums))
         ))
-        grouped_rows[min_idx].append(row)
+        territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([row])], ignore_index=True)
         territory_counts[min_idx] += 1
         territory_sums[min_idx] += row['_total']
 
-    # Create DataFrames for each territory
-    for i, territory_rows in enumerate(grouped_rows):
-        territories[i] = pd.DataFrame(territory_rows).drop(columns='_total')
+    # Remove the '_total' column from the final territories
+    for i in range(num_territories):
+        territories[i] = territories[i].drop(columns='_total')
         territories[i].insert(0, 'Territory', i + 1)
 
     logging.info(f"Total territories created: {len(territories)}")
