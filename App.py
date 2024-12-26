@@ -69,8 +69,7 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     for idx, row in df_sorted.iterrows():
         # Calculate a composite score for each territory
         min_idx = min(range(num_territories), key=lambda i: (
-            territory_counts[i],  # Prioritize even distribution of counts
-            territory_sums[i]  # Then balance by total value
+            territory_counts[i] + territory_sums[i] / (idx + 1)  # Balance both count and sum
         ))
         territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([row])], ignore_index=True)
         territory_counts[min_idx] += 1
