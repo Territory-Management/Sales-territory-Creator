@@ -16,17 +16,17 @@ MONETARY_SYMBOLS_REGEX = r'[\u20ac$\u00a3,]'
 
 # Helper Functions
 def load_data(file) -> Optional[pd.DataFrame]:
-    """Load CSV file with error handling for encoding issues."""
+    """Load CSV file with error handling for encoding and header issues."""
     try:
+        # Tentative avec utf-8
         df = pd.read_csv(file, encoding=DEFAULT_ENCODING, engine='python', sep=None)
         logging.info("File successfully loaded with utf-8 encoding.")
-        return df
     except UnicodeDecodeError:
         try:
             file.seek(0)
+            # Tentative avec latin1
             df = pd.read_csv(file, encoding=BACKUP_ENCODING, engine='python', sep=None)
             logging.info("File successfully loaded with latin1 encoding.")
-            return df
         except Exception as e:
             logging.error(f"Error loading file with latin1: {str(e)}")
             st.error("Error loading file. Please check the format.")
@@ -35,6 +35,18 @@ def load_data(file) -> Optional[pd.DataFrame]:
         logging.error(f"Error loading file: {str(e)}")
         st.error("Error loading file. Please check the format.")
         return None
+
+    # Vérification de l'en-tête
+    if df.columns[0].startswith("Unnamed:"):
+        logging.warning("First column appears unnamed. Treating as an index column.")
+        df = pd.read_csv(file, encoding=DEFAULT_ENCODING, engine='python', sep=None, index_col=0)
+
+    # Vérifie si toutes les colonnes attendues sont correctement lues
+    if len(df.columns) < 2:
+        st.error("The uploaded file does not have enough columns or is misaligned.")
+        return None
+
+    return df
 
 def normalize_numeric_column(series: pd.Series) -> pd.Series:
     """Normalize columns with monetary symbols and non-numeric characters."""
@@ -48,33 +60,17 @@ def normalize_numeric_column(series: pd.Series) -> pd.Series:
 
 def distribute_equally(df: pd.DataFrame, num_territories: int, balance_columns: List[str]) -> List[pd.DataFrame]:
     """Distribute rows equitably by count and sum of specified columns across territories."""
-    # Compute total sums for balancing
-    col_sums = df[balance_columns].sum()
-    target_sum = col_sums / num_territories
-    target_count = len(df) // num_territories
-
-    # Initialize territories
     territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
-    balances = [pd.Series(0, index=balance_columns) for _ in range(num_territories)]
+    df_sorted = df.sort_values(balance_columns, ascending=False)
 
-    # Sort rows by descending sum of balance columns
-    sorted_df = df.sort_values(balance_columns, ascending=False)
-
-    # Assign rows to territories
-    for _, row in sorted_df.iterrows():
-        best_fit = None
-        smallest_diff = float('inf')
-
-        for i, balance in enumerate(balances):
-            projected_balance = balance + row[balance_columns]
-            projected_diff = ((projected_balance - target_sum) ** 2).sum()
-
-            if len(territories[i]) < target_count or projected_diff < smallest_diff:
-                best_fit = i
-                smallest_diff = projected_diff
-
-        territories[best_fit] = pd.concat([territories[best_fit], pd.DataFrame([row])], ignore_index=True)
-        balances[best_fit] += row[balance_columns]
+    # Initial allocation by row count and sum balancing
+    sums = [0] * num_territories
+    counts = [0] * num_territories
+    for _, row in df_sorted.iterrows():
+        min_index = min(range(num_territories), key=lambda i: (counts[i], sums[i]))
+        territories[min_index] = pd.concat([territories[min_index], pd.DataFrame([row])], ignore_index=True)
+        counts[min_index] += 1
+        sums[min_index] += row[balance_columns].sum()
 
     return territories
 
@@ -150,7 +146,7 @@ def main():
 
         if df is not None:
             st.write("Data Preview:", df.head())
-            st.write("Available Columns:", df.columns.tolist())
+            st.write("Column names detected:", df.columns.tolist())
 
             balance_columns = st.multiselect(
                 "Select columns to balance",
