@@ -4,12 +4,14 @@ import base64
 import logging
 import re
 from typing import List, Optional
-from datetime import datetime
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def clean_numeric_value(value) -> float:
+    """
+    Clean numeric values by removing non-numeric characters and converting to float.
+    """
     if pd.isna(value):
         return 0.0
     try:
@@ -20,6 +22,9 @@ def clean_numeric_value(value) -> float:
         return 0.0
 
 def load_data(file) -> Optional[pd.DataFrame]:
+    """
+    Load and preprocess the CSV file. Ensures the first column is correctly interpreted.
+    """
     try:
         file.seek(0)
         sample_data = file.read(1024).decode('utf-8')
@@ -41,41 +46,42 @@ def load_data(file) -> Optional[pd.DataFrame]:
         return None
 
 def distribute_territories(df: pd.DataFrame, num_territories: int, balance_columns: List[str]) -> List[pd.DataFrame]:
+    """
+    Distribute rows to territories such that the total sum for the specified columns is balanced.
+    """
+    # Initialize empty territories
     territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
+    territory_sums = [0.0] * num_territories
 
-    df['Dt resiliation contrat all'] = pd.to_datetime(df['Dt resiliation contrat all'], errors='coerce')
-
-    # Calculate total values for all data
+    # Calculate total values for the balance columns
     df['_total'] = df.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
 
-    # Sort by total value
-    all_data_sorted = df.sort_values('_total', ascending=False)
+    # Sort the dataframe by total value in descending order
+    df_sorted = df.sort_values('_total', ascending=False)
 
-    territory_sums = [0.0] * num_territories
-    territory_counts = [0] * num_territories
-
-    # Distribute data using a round-robin approach with balancing
-    for _, row in all_data_sorted.iterrows():
-        # Determine the best territory based on both count and total value
-        min_idx = min(range(num_territories), key=lambda i: (
-            territory_counts[i] + territory_sums[i] / max(1, sum(territory_sums))
-        ))
+    # Greedy assignment to balance the total sums
+    for _, row in df_sorted.iterrows():
+        # Find the territory with the smallest current sum
+        min_idx = min(range(num_territories), key=lambda i: territory_sums[i])
         territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([row])], ignore_index=True)
-        territory_counts[min_idx] += 1
         territory_sums[min_idx] += row['_total']
 
-    # Remove the '_total' column from the final territories
+    # Remove the temporary '_total' column from the final territories
     for i in range(num_territories):
         territories[i] = territories[i].drop(columns='_total')
         territories[i].insert(0, 'Territory', i + 1)
 
-    logging.info(f"Total territories created: {len(territories)}")
-    for idx, territory in enumerate(territories):
-        logging.info(f"Territory {idx + 1}: {len(territory)} accounts")
+    # Log final distribution
+    logging.info("Final Distribution of Territories:")
+    for idx, total in enumerate(territory_sums):
+        logging.info(f"Territory {idx + 1}: Total Sum = {total}, Row Count = {len(territories[idx])}")
 
     return territories
 
 def get_territory_metrics(territories: List[pd.DataFrame], balance_columns: List[str]) -> pd.DataFrame:
+    """
+    Generate metrics for each territory, including count and total values for specified columns.
+    """
     metrics = []
     for i, territory in enumerate(territories):
         metric = {
@@ -89,6 +95,9 @@ def get_territory_metrics(territories: List[pd.DataFrame], balance_columns: List
     return pd.DataFrame(metrics)
 
 def get_download_link(df: pd.DataFrame, filename: str) -> str:
+    """
+    Generate a download link for a dataframe as a CSV file.
+    """
     csv = df.to_csv(index=False)
     b64 = base64.b64encode(csv.encode()).decode()
     return f'<a href="data:file/csv;base64,{b64}" download="{filename}">Download {filename}</a>'
