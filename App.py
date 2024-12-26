@@ -57,7 +57,7 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     # Calculate total values for regular data
     regular_data['_total'] = regular_data.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
 
-    # Distribute regular data
+    # Sort by total value
     regular_data_sorted = regular_data.sort_values('_total', ascending=False)
 
     territory_sums = [0.0] * num_territories
@@ -65,8 +65,8 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     grouped_rows = [[] for _ in range(num_territories)]
 
     for _, row in regular_data_sorted.iterrows():
-        # Prioritize territories with the least total value
-        min_idx = min(range(num_territories), key=lambda i: (territory_sums[i], territory_counts[i]))
+        # Select the territory based on both total value and client count
+        min_idx = min(range(num_territories), key=lambda i: (territory_sums[i] + territory_counts[i]))
         grouped_rows[min_idx].append(row)
         territory_counts[min_idx] += 1
         territory_sums[min_idx] += row['_total']
@@ -81,8 +81,8 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
         termination_clients_sorted = termination_clients.sort_values('_total', ascending=False)
         
         for _, client in termination_clients_sorted.iterrows():
-            # Prioritize territories with the least total value
-            min_idx = min(range(num_territories), key=lambda i: (territory_sums[i], territory_counts[i]))
+            # Select the territory based on both total value and client count
+            min_idx = min(range(num_territories), key=lambda i: (territory_sums[i] + territory_counts[i]))
             territories[min_idx] = pd.concat(
                 [territories[min_idx], pd.DataFrame([client.drop(labels='_total')])],
                 ignore_index=True
