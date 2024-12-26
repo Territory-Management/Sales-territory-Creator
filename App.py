@@ -4,6 +4,7 @@ import numpy as np
 import base64
 import logging
 from typing import List, Optional
+from scipy.optimize import linear_sum_assignment
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -45,27 +46,25 @@ def normalize_numeric_column(series: pd.Series) -> pd.Series:
         errors='coerce'
     )
 
-def distribute_equally_by_count_and_sum(df: pd.DataFrame, num_territories: int, balance_columns: List[str]) -> List[pd.DataFrame]:
+def distribute_equally(df: pd.DataFrame, num_territories: int, balance_columns: List[str]) -> List[pd.DataFrame]:
     """Distribute rows equitably by count and sum of specified columns across territories."""
-    # Initialize empty territories
-    territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
-    
-    # Calculate targets for balancing
-    total_rows = len(df)
-    total_sums = df[balance_columns].sum()
-    target_count = total_rows // num_territories
-    target_sums = total_sums / num_territories
-
-    # Sort by balance columns and distribute
+    # Create a cost matrix for balancing
+    cost_matrix = []
     for _, row in df.iterrows():
-        best_index = min(
-            range(num_territories),
-            key=lambda i: (
-                abs(len(territories[i]) - target_count),
-                sum(abs(territories[i][col].sum() + row[col] - target_sums[col]) for col in balance_columns)
-            )
-        )
-        territories[best_index] = pd.concat([territories[best_index], pd.DataFrame([row])], ignore_index=True)
+        cost_row = []
+        for _ in range(num_territories):
+            cost_row.append(sum(abs(row[col]) for col in balance_columns))
+        cost_matrix.append(cost_row)
+
+    cost_matrix = np.array(cost_matrix)
+
+    # Solve assignment problem
+    row_ind, col_ind = linear_sum_assignment(cost_matrix)
+
+    # Assign rows to territories
+    territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
+    for i, j in zip(row_ind, col_ind):
+        territories[j] = pd.concat([territories[j], pd.DataFrame([df.iloc[i]])], ignore_index=True)
 
     return territories
 
@@ -109,10 +108,7 @@ def create_territories(
     for col in balance_columns:
         working_df[col] = normalize_numeric_column(working_df[col])
 
-    if weights is None:
-        weights = [1 / len(balance_columns)] * len(balance_columns)
-
-    territories = distribute_equally_by_count_and_sum(working_df, num_territories, balance_columns)
+    territories = distribute_equally(working_df, num_territories, balance_columns)
 
     if not termination_clients.empty:
         territories = distribute_termination_clients_by_year(territories, termination_clients, years)
@@ -162,26 +158,16 @@ def main():
                     "Number of territories", min_value=2, max_value=len(df), value=2
                 )
 
-            with col2:
-                use_weights = st.checkbox("Use custom weights", value=False)
-
             years = st.multiselect(
                 "Select termination years",
                 options=[2024, 2025, 2026],
                 default=[2024]
             )
 
-            weights = None
-            if use_weights:
-                st.write("Assign absolute weights (weights will be normalized automatically):")
-                weights = [st.number_input(f"Weight for {col}", min_value=0.0, value=100.0, step=10.0) for col in balance_columns]
-                total = sum(weights)
-                weights = [w / total for w in weights]
-
             if st.button("Create Territories"):
                 with st.spinner("Creating territories..."):
                     territories, metrics = create_territories(
-                        df, num_territories, balance_columns, weights, years
+                        df, num_territories, balance_columns, None, years
                     )
 
                 st.subheader("Territory Metrics")
