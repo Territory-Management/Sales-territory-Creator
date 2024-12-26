@@ -68,7 +68,7 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     # Assign rows to territories in a balanced way
     for idx, row in df_sorted.iterrows():
         # Calculate a composite score for each territory, dynamically adjusting weights
-        weight_count = 0.6 if idx < len(df_sorted) * 0.5 else 0.4
+        weight_count = 0.7 if idx < len(df_sorted) * 0.3 else 0.5
         weight_sum = 1 - weight_count
         min_idx = min(range(num_territories), key=lambda i: (
             territory_counts[i] * weight_count + territory_sums[i] * weight_sum  # Dynamic balance
