@@ -13,18 +13,34 @@ DEFAULT_ENCODING = "utf-8"
 BACKUP_ENCODING = "latin1"
 MONETARY_SYMBOLS_REGEX = r'[\u20ac$\u00a3,]'
 
-# Helper Functions
 def load_data(file) -> Optional[pd.DataFrame]:
-    """Load CSV file with error handling for encoding and header issues."""
+    """Load CSV file with improved handling for client code column."""
     try:
-        # Tentative avec utf-8
-        df = pd.read_csv(file, encoding=DEFAULT_ENCODING, engine='python', sep=None)
+        # First attempt: Try reading with default settings
+        df = pd.read_csv(file, encoding=DEFAULT_ENCODING, dtype={'Code client': str})
+        if 'Code client' not in df.columns and len(df.columns) > 0:
+            # If first column is unnamed, try reading with first column as index
+            file.seek(0)
+            df = pd.read_csv(
+                file,
+                encoding=DEFAULT_ENCODING,
+                index_col=False,
+                dtype={df.columns[0]: str}  # Force first column as string
+            )
+            # Rename first column if it's unnamed
+            if df.columns[0].startswith('Unnamed:'):
+                df.rename(columns={df.columns[0]: 'Code client'}, inplace=True)
+        
         logging.info("File successfully loaded with utf-8 encoding.")
     except UnicodeDecodeError:
         try:
             file.seek(0)
-            # Tentative avec latin1
-            df = pd.read_csv(file, encoding=BACKUP_ENCODING, engine='python', sep=None)
+            # Backup attempt with latin1 encoding
+            df = pd.read_csv(
+                file,
+                encoding=BACKUP_ENCODING,
+                dtype={'Code client': str}
+            )
             logging.info("File successfully loaded with latin1 encoding.")
         except Exception as e:
             logging.error(f"Error loading file with latin1: {str(e)}")
@@ -35,17 +51,15 @@ def load_data(file) -> Optional[pd.DataFrame]:
         st.error("Error loading file. Please check the format.")
         return None
 
-    # Vérification de l'en-tête
-    if df.columns[0].startswith("Unnamed:"):
-        logging.warning("First column appears unnamed. Treating as an index column.")
-        file.seek(0)
-        df = pd.read_csv(file, encoding=DEFAULT_ENCODING, engine='python', sep=None, index_col=0)
-
-    # Vérifie si toutes les colonnes attendues sont correctement lues
+    # Ensure client code is properly formatted
+    if 'Code client' in df.columns:
+        df['Code client'] = df['Code client'].astype(str).str.zfill(8)
+    
+    # Verify minimum columns requirement
     if len(df.columns) < 2:
-        st.error("The uploaded file does not have enough columns or is misaligned.")
+        st.error("The uploaded file does not have enough columns.")
         return None
-
+        
     return df
 
 def normalize_numeric_column(series: pd.Series) -> pd.Series:
@@ -61,7 +75,10 @@ def normalize_numeric_column(series: pd.Series) -> pd.Series:
 def distribute_equally(df: pd.DataFrame, num_territories: int, balance_columns: List[str]) -> List[pd.DataFrame]:
     """Distribute rows equitably by count and sum of specified columns across territories."""
     territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
-    df_sorted = df.sort_values(balance_columns, ascending=False)
+    
+    # Ensure numerical values for sorting
+    sort_values = df[balance_columns].apply(pd.to_numeric, errors='coerce')
+    df_sorted = df.iloc[(-sort_values.sum(axis=1)).argsort()]
 
     # Initial allocation by row count and sum balancing
     sums = [0] * num_territories
@@ -70,7 +87,7 @@ def distribute_equally(df: pd.DataFrame, num_territories: int, balance_columns: 
         min_index = min(range(num_territories), key=lambda i: (counts[i], sums[i]))
         territories[min_index] = pd.concat([territories[min_index], pd.DataFrame([row])], ignore_index=True)
         counts[min_index] += 1
-        sums[min_index] += row[balance_columns].sum()
+        sums[min_index] += sum(normalize_numeric_column(row[col]) for col in balance_columns)
 
     return territories
 
@@ -110,17 +127,21 @@ def create_territories(
             ~working_df['Dt resiliation contrat all'].dt.year.isin(years)
         ]
 
+    # Normalize balance columns
     for col in balance_columns:
         working_df[col] = normalize_numeric_column(working_df[col])
 
     territories = distribute_equally(working_df, num_territories, balance_columns)
 
     if not termination_clients.empty:
-        territories = distribute_termination_clients_by_year(territories, termination_clients, years)
+        territories = distribute_termination_clients_by_year(
+            territories, termination_clients, years
+        )
 
     for i, territory in enumerate(territories):
         territory['Territory'] = i + 1
 
+    # Calculate metrics for each territory
     metrics = []
     for i, territory in enumerate(territories):
         metric = {'Territory': i + 1, 'Count': len(territory)}
@@ -149,8 +170,8 @@ def main():
 
             balance_columns = st.multiselect(
                 "Select columns to balance",
-                options=df.columns.tolist(),
-                default=df.columns.tolist()[:1]
+                options=[col for col in df.columns if col != 'Code client'],
+                default=[col for col in df.columns if col != 'Code client'][:1]
             )
 
             if not balance_columns:
