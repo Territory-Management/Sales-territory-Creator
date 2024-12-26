@@ -5,7 +5,6 @@ import logging
 import re
 from typing import List, Optional
 from datetime import datetime
-import numpy as np
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -60,8 +59,8 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     # Calculate total values for balancing columns
     df["_total"] = df.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
 
-    # Sort and interleave high and low values
-    df_sorted = df.sort_values("_total", ascending=False).reset_index(drop=True)
+    # Shuffle and sort by total value
+    df_sorted = df.sample(frac=1, random_state=42).sort_values("_total", ascending=False).reset_index(drop=True)
 
     territory_sums = [0.0] * num_territories
     territory_counts = [0] * num_territories
@@ -70,7 +69,8 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     for idx, row in df_sorted.iterrows():
         # Calculate a composite score for each territory
         min_idx = min(range(num_territories), key=lambda i: (
-            territory_counts[i] + territory_sums[i] / (idx + 1)  # Balance both count and sum
+            territory_counts[i],  # Prioritize even distribution of counts
+            territory_sums[i]  # Then balance by total value
         ))
         territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([row])], ignore_index=True)
         territory_counts[min_idx] += 1
