@@ -4,14 +4,13 @@ import base64
 import logging
 import re
 from typing import List, Optional
+from datetime import datetime
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def clean_numeric_value(value) -> float:
-    """
-    Clean numeric values by removing non-numeric characters and converting to float.
-    """
+    """Cleans and converts a value to numeric, removing non-numeric characters."""
     if pd.isna(value):
         return 0.0
     try:
@@ -21,10 +20,16 @@ def clean_numeric_value(value) -> float:
     except (ValueError, TypeError):
         return 0.0
 
+def preprocess_dataframe(df: pd.DataFrame, balance_columns: List[str]) -> pd.DataFrame:
+    """Prepares the DataFrame by cleaning numeric columns and handling missing data."""
+    for col in balance_columns:
+        if col not in df.columns:
+            raise ValueError(f"Column '{col}' not found in the uploaded file.")
+        df[col] = df[col].apply(clean_numeric_value)
+    return df
+
 def load_data(file) -> Optional[pd.DataFrame]:
-    """
-    Load and preprocess the CSV file. Ensures the first column is correctly interpreted.
-    """
+    """Loads a CSV file and handles headers and separators."""
     try:
         file.seek(0)
         sample_data = file.read(1024).decode('utf-8')
@@ -45,51 +50,47 @@ def load_data(file) -> Optional[pd.DataFrame]:
         st.error(f"Error loading file: {str(e)}")
         return None
 
-def distribute_territories(df: pd.DataFrame, num_territories: int, balance_columns: List[str]) -> List[pd.DataFrame]:
-    """
-    Distribute rows to territories, balancing both total sums and row counts.
-    """
-    # Initialize territories
-    territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
+def distribute_territories(
+    df: pd.DataFrame,
+    num_territories: int,
+    balance_columns: List[str]
+) -> List[pd.DataFrame]:
+    """Distributes rows across territories balancing count and sum of specified columns."""
+    # Initialize empty territories
+    territories = [list() for _ in range(num_territories)]
     territory_sums = [0.0] * num_territories
     territory_counts = [0] * num_territories
 
-    # Calculate total values for the balance columns
-    df['_total'] = df.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
+    # Sort rows by the total value of balance columns in descending order
+    sorted_rows = df.apply(
+        lambda row: sum(row[col] for col in balance_columns),
+        axis=1
+    ).sort_values(ascending=False).index
 
-    # Sort rows by total value in descending order
-    df_sorted = df.sort_values('_total', ascending=False)
+    # Assign rows using a bin-packing heuristic
+    for idx in sorted_rows:
+        row = df.loc[idx]
+        row_total = sum(row[col] for col in balance_columns)
 
-    # Assign rows iteratively
-    for _, row in df_sorted.iterrows():
-        # Calculate imbalance score for each territory
-        scores = [
-            (territory_sums[i] + row['_total']) - (sum(territory_sums) / num_territories)
-            + abs(territory_counts[i] + 1 - (len(df) / num_territories))
-            for i in range(num_territories)
-        ]
-        # Assign row to the territory with the lowest score
-        min_idx = scores.index(min(scores))
-        territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([row])], ignore_index=True)
-        territory_sums[min_idx] += row['_total']
-        territory_counts[min_idx] += 1
+        # Determine the best territory to assign based on total sum and count
+        best_territory = min(
+            range(num_territories),
+            key=lambda t: (territory_sums[t] + row_total, territory_counts[t])
+        )
+        territories[best_territory].append(row)
+        territory_sums[best_territory] += row_total
+        territory_counts[best_territory] += 1
 
-    # Clean up temporary '_total' column and add Territory identifier
-    for i in range(num_territories):
-        territories[i] = territories[i].drop(columns=['_total'])
-        territories[i].insert(0, 'Territory', i + 1)
+    # Convert lists back to DataFrames
+    territory_dfs = [pd.DataFrame(territory, columns=df.columns) for territory in territories]
 
-    # Log final distribution
-    logging.info("Final Distribution of Territories:")
-    for idx, (total, count) in enumerate(zip(territory_sums, territory_counts)):
-        logging.info(f"Territory {idx + 1}: Total Sum = {total}, Row Count = {count}")
+    for i, territory in enumerate(territory_dfs):
+        territory.insert(0, 'Territory', i + 1)
 
-    return territories
+    return territory_dfs
 
 def get_territory_metrics(territories: List[pd.DataFrame], balance_columns: List[str]) -> pd.DataFrame:
-    """
-    Generate metrics for each territory, including count and total values for specified columns.
-    """
+    """Calculates metrics for each territory."""
     metrics = []
     for i, territory in enumerate(territories):
         metric = {
@@ -97,15 +98,12 @@ def get_territory_metrics(territories: List[pd.DataFrame], balance_columns: List
             'Count': len(territory)
         }
         for col in balance_columns:
-            total = territory[col].apply(clean_numeric_value).sum()
-            metric[f'{col}_total'] = total
+            metric[f'{col}_total'] = territory[col].sum()
         metrics.append(metric)
     return pd.DataFrame(metrics)
 
 def get_download_link(df: pd.DataFrame, filename: str) -> str:
-    """
-    Generate a download link for a dataframe as a CSV file.
-    """
+    """Generates a download link for a DataFrame."""
     csv = df.to_csv(index=False)
     b64 = base64.b64encode(csv.encode()).decode()
     return f'<a href="data:file/csv;base64,{b64}" download="{filename}">Download {filename}</a>'
@@ -123,8 +121,8 @@ def main():
 
             balance_columns = st.multiselect(
                 "Select columns to balance",
-                options=[col for col in df.columns if col != 'Code client' and col != 'Dt resiliation contrat all'],
-                default=[col for col in df.columns if col != 'Code client' and col != 'Dt resiliation contrat all'][:1]
+                options=[col for col in df.columns if col not in ('Code client', 'Dt resiliation contrat all')],
+                default=[col for col in df.columns if col not in ('Code client', 'Dt resiliation contrat all')][:1]
             )
 
             if not balance_columns:
@@ -139,6 +137,14 @@ def main():
             )
 
             if st.button("Create Territories"):
+                # Preprocess the DataFrame
+                try:
+                    df = preprocess_dataframe(df, balance_columns)
+                except ValueError as e:
+                    st.error(str(e))
+                    return
+
+                # Distribute territories
                 territories = distribute_territories(df, num_territories, balance_columns)
                 metrics = get_territory_metrics(territories, balance_columns)
 
