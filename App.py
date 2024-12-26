@@ -60,16 +60,17 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     # Calculate total values for balancing columns
     df["_total"] = df.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
 
-    # Shuffle before sorting to reduce bias
-    df = df.sample(frac=1, random_state=42).sort_values("_total", ascending=False)
+    # Sort and interleave high and low values
+    df_sorted = df.sort_values("_total", ascending=False).reset_index(drop=True)
 
     territory_sums = [0.0] * num_territories
     territory_counts = [0] * num_territories
 
     # Assign rows to territories in a balanced way
-    for _, row in df.iterrows():
+    for idx, row in df_sorted.iterrows():
+        # Calculate a composite score for each territory
         min_idx = min(range(num_territories), key=lambda i: (
-            territory_sums[i] * 0.5 + territory_counts[i]  # Weighted balance initially more on sums
+            territory_counts[i] + territory_sums[i] / (idx + 1)  # Balance both count and sum
         ))
         territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([row])], ignore_index=True)
         territory_counts[min_idx] += 1
