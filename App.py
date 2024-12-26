@@ -55,7 +55,6 @@ def filter_rows(df: pd.DataFrame) -> pd.DataFrame:
 
 def distribute_territories(df: pd.DataFrame, num_territories: int, balance_columns: List[str]) -> List[pd.DataFrame]:
     """Distribute clients into territories, balancing both count and total value."""
-    # Initialize territories as lists to collect rows
     territories = [[] for _ in range(num_territories)]
 
     # Calculate total values for balancing columns
@@ -67,15 +66,22 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     territory_sums = np.zeros(num_territories)
     territory_counts = np.zeros(num_territories)
 
-    # Assign rows to territories in a balanced way
-    for _, row in df_sorted.iterrows():
-        # Calculate a composite score for each territory, dynamically adjusting weights
-        weight_count = 0.7 if _ < len(df_sorted) * 0.3 else 0.5
-        weight_sum = 1 - weight_count
-        min_idx = np.argmin(territory_counts * weight_count + territory_sums * weight_sum)
+    # Initial round-robin distribution for even start
+    for idx, row in df_sorted.iterrows():
+        min_idx = idx % num_territories
         territories[min_idx].append(row)
         territory_counts[min_idx] += 1
         territory_sums[min_idx] += row["_total"]
+
+    # Iterative balancing
+    for _ in range(10):
+        for idx, row in df_sorted.iterrows():
+            weight_count = 0.8 if idx < len(df_sorted) * 0.2 else 0.5
+            weight_sum = 1 - weight_count
+            min_idx = np.argmin(territory_counts * weight_count + territory_sums * weight_sum)
+            territories[min_idx].append(row)
+            territory_counts[min_idx] += 1
+            territory_sums[min_idx] += row["_total"]
 
     # Convert lists of rows into DataFrames
     for i in range(num_territories):
