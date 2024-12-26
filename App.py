@@ -5,6 +5,7 @@ import logging
 import re
 from typing import List, Optional
 from datetime import datetime
+import numpy as np
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -59,17 +60,16 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     # Calculate total values for balancing columns
     df["_total"] = df.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
 
-    # Sort data by total value
-    df_sorted = df.sort_values("_total", ascending=False)
+    # Shuffle before sorting to reduce bias
+    df = df.sample(frac=1, random_state=42).sort_values("_total", ascending=False)
 
     territory_sums = [0.0] * num_territories
     territory_counts = [0] * num_territories
 
     # Assign rows to territories in a balanced way
-    for _, row in df_sorted.iterrows():
+    for _, row in df.iterrows():
         min_idx = min(range(num_territories), key=lambda i: (
-            territory_counts[i],  # Prioritize even row distribution
-            territory_sums[i]  # Then consider total value
+            territory_sums[i] * 0.5 + territory_counts[i]  # Weighted balance initially more on sums
         ))
         territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([row])], ignore_index=True)
         territory_counts[min_idx] += 1
