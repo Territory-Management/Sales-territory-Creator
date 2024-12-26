@@ -8,20 +8,26 @@ from typing import List, Optional
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+# Constants
+DEFAULT_ENCODING = "utf-8"
+BACKUP_ENCODING = "latin1"
+MONETARY_SYMBOLS_REGEX = r'[\u20ac$\u00a3,]'
+
+# Helper Functions
 def load_data(file) -> Optional[pd.DataFrame]:
     """Load CSV file with error handling for encoding issues."""
     try:
-        df = pd.read_csv(file, encoding='utf-8', engine='python', sep=None)
+        df = pd.read_csv(file, encoding=DEFAULT_ENCODING, engine='python', sep=None)
         logging.info("File successfully loaded with utf-8 encoding.")
         return df
     except UnicodeDecodeError:
         try:
             file.seek(0)
-            df = pd.read_csv(file, encoding='latin1', engine='python', sep=None)
+            df = pd.read_csv(file, encoding=BACKUP_ENCODING, engine='python', sep=None)
             logging.info("File successfully loaded with latin1 encoding.")
             return df
         except Exception as e:
-            logging.error(f"Error loading file: {str(e)}")
+            logging.error(f"Error loading file with latin1: {str(e)}")
             st.error("Error loading file. Please check the format.")
             return None
     except Exception as e:
@@ -32,7 +38,10 @@ def load_data(file) -> Optional[pd.DataFrame]:
 def normalize_numeric_column(series: pd.Series) -> pd.Series:
     """Normalize columns with monetary symbols and non-numeric characters."""
     return pd.to_numeric(
-        series.astype(str).str.replace(r'[\u20ac$\u00a3,]', '', regex=True).str.replace(',', '.').str.strip(),
+        series.astype(str)
+        .str.replace(MONETARY_SYMBOLS_REGEX, '', regex=True)
+        .str.replace(',', '.')
+        .str.strip(),
         errors='coerce'
     )
 
@@ -42,15 +51,30 @@ def distribute_equally_by_count_and_sum(df: pd.DataFrame, num_territories: int, 
     sorted_df = df.sort_values(balance_columns, ascending=False)
 
     for _, row in sorted_df.iterrows():
-        min_index = min(range(num_territories), key=lambda i: (len(territories[i]), -territories[i][balance_columns].sum().sum()))
-        territories[min_index] = territories[min_index].append(row)
+        min_index = min(
+            range(num_territories),
+            key=lambda i: (
+                len(territories[i]),
+                -territories[i][balance_columns].sum().sum()
+            )
+        )
+        territories[min_index] = pd.concat([territories[min_index], pd.DataFrame([row])], ignore_index=True)
 
     return territories
 
-def distribute_termination_clients_equally(territories: List[pd.DataFrame], termination_clients: pd.DataFrame) -> List[pd.DataFrame]:
-    """Distribute termination clients equally among territories."""
-    for i, client in enumerate(termination_clients.itertuples(index=False)):
-        territories[i % len(territories)] = pd.concat([territories[i % len(territories)], pd.DataFrame([client._asdict()])], ignore_index=True)
+def distribute_termination_clients_by_year(
+    territories: List[pd.DataFrame], termination_clients: pd.DataFrame, years: List[int]
+) -> List[pd.DataFrame]:
+    """Distribute termination clients equally among territories for each year."""
+    for year in years:
+        year_clients = termination_clients[
+            termination_clients['Dt resiliation contrat all'].dt.year == year
+        ]
+        for i, client in enumerate(year_clients.itertuples(index=False)):
+            territories[i % len(territories)] = pd.concat(
+                [territories[i % len(territories)], pd.DataFrame([client._asdict()])],
+                ignore_index=True
+            )
     return territories
 
 def create_territories(
@@ -65,9 +89,15 @@ def create_territories(
     termination_clients = pd.DataFrame()
 
     if years:
-        working_df['Dt resiliation contrat all'] = pd.to_datetime(working_df['Dt resiliation contrat all'], errors='coerce')
-        termination_clients = working_df[working_df['Dt resiliation contrat all'].dt.year.isin(years)]
-        working_df = working_df[~working_df['Dt resiliation contrat all'].dt.year.isin(years)]
+        working_df['Dt resiliation contrat all'] = pd.to_datetime(
+            working_df['Dt resiliation contrat all'], errors='coerce'
+        )
+        termination_clients = working_df[
+            working_df['Dt resiliation contrat all'].dt.year.isin(years)
+        ]
+        working_df = working_df[
+            ~working_df['Dt resiliation contrat all'].dt.year.isin(years)
+        ]
 
     for col in balance_columns:
         working_df[col] = normalize_numeric_column(working_df[col])
@@ -78,7 +108,7 @@ def create_territories(
     territories = distribute_equally_by_count_and_sum(working_df, num_territories, balance_columns)
 
     if not termination_clients.empty:
-        territories = distribute_termination_clients_equally(territories, termination_clients)
+        territories = distribute_termination_clients_by_year(territories, termination_clients, years)
 
     for i, territory in enumerate(territories):
         territory['Territory'] = i + 1
@@ -142,9 +172,10 @@ def main():
                 weights = [w / total for w in weights]
 
             if st.button("Create Territories"):
-                territories, metrics = create_territories(
-                    df, num_territories, balance_columns, weights, years
-                )
+                with st.spinner("Creating territories..."):
+                    territories, metrics = create_territories(
+                        df, num_territories, balance_columns, weights, years
+                    )
 
                 st.subheader("Territory Metrics")
                 st.write(metrics)
