@@ -14,24 +14,49 @@ BACKUP_ENCODING = "latin1"
 MONETARY_SYMBOLS_REGEX = r'[\u20ac$\u00a3,]'
 
 def load_data(file) -> Optional[pd.DataFrame]:
-    """Load CSV file with improved handling for client code column."""
+    """Load CSV file with improved handling for client code column and detailed error logging."""
     try:
-        # First attempt: Try reading with default settings
-        df = pd.read_csv(file, encoding=DEFAULT_ENCODING, dtype={'Code client': str})
-        if 'Code client' not in df.columns and len(df.columns) > 0:
-            # If first column is unnamed, try reading with first column as index
-            file.seek(0)
-            df = pd.read_csv(
-                file,
-                encoding=DEFAULT_ENCODING,
-                index_col=False,
-                dtype={df.columns[0]: str}  # Force first column as string
-            )
-            # Rename first column if it's unnamed
-            if df.columns[0].startswith('Unnamed:'):
-                df.rename(columns={df.columns[0]: 'Code client'}, inplace=True)
+        # Try to read first few lines to detect the separator and structure
+        file.seek(0)
+        sample_data = file.read(1024).decode(DEFAULT_ENCODING)
+        logging.info(f"Sample of file content: {sample_data[:200]}")
+        
+        # Reset file pointer
+        file.seek(0)
+        
+        # Try to detect separator
+        import csv
+        dialect = csv.Sniffer().sniff(sample_data)
+        separator = dialect.delimiter
+        logging.info(f"Detected separator: '{separator}'")
+        
+        # First attempt with detected separator
+        df = pd.read_csv(
+            file, 
+            encoding=DEFAULT_ENCODING,
+            sep=separator,
+            dtype=str  # Read all columns as string initially
+        )
+        
+        logging.info(f"Columns detected: {df.columns.tolist()}")
+        
+        # Check if we need to handle the first column
+        if len(df.columns) > 0:
+            first_col = df.columns[0]
+            if first_col.startswith('Unnamed:') or 'Code client' not in df.columns:
+                # Try reading the file again with the first column properly handled
+                file.seek(0)
+                df = pd.read_csv(
+                    file,
+                    encoding=DEFAULT_ENCODING,
+                    sep=separator,
+                    dtype=str
+                )
+                # Rename first column if necessary
+                df.rename(columns={first_col: 'Code client'}, inplace=True)
         
         logging.info("File successfully loaded with utf-8 encoding.")
+        logging.info(f"Final columns: {df.columns.tolist()}")
     except UnicodeDecodeError:
         try:
             file.seek(0)
