@@ -52,11 +52,22 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     else:
         termination_clients = pd.DataFrame()
 
+    # Distribute termination clients equally across territories
+    if not termination_clients.empty:
+        termination_clients['_total'] = termination_clients.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
+        termination_clients_sorted = termination_clients.sort_values('_total', ascending=False).drop('_total', axis=1)
+        
+        for i, client in enumerate(termination_clients_sorted.itertuples(index=False)):
+            territories[i % num_territories] = pd.concat(
+                [territories[i % num_territories], pd.DataFrame([client._asdict()])],
+                ignore_index=True
+            )
+    
     df['_total'] = df.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
     df_sorted = df.sort_values('_total', ascending=False).drop('_total', axis=1)
 
     territory_sums = [0.0] * num_territories
-    territory_counts = [0] * num_territories
+    territory_counts = [len(territories[i]) for i in range(num_territories)]
     grouped_rows = [[] for _ in range(num_territories)]
 
     for _, row in df_sorted.iterrows():
@@ -66,18 +77,8 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
         territory_sums[min_idx] += sum(clean_numeric_value(row[col]) for col in balance_columns)
 
     for i, territory_rows in enumerate(grouped_rows):
-        territories[i] = pd.DataFrame(territory_rows)
+        territories[i] = pd.concat([territories[i], pd.DataFrame(territory_rows)], ignore_index=True)
         territories[i].insert(0, 'Territory', i + 1)
-
-    if not termination_clients.empty:
-        termination_clients['_total'] = termination_clients.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
-        termination_clients_sorted = termination_clients.sort_values('_total', ascending=False).drop('_total', axis=1)
-        
-        for _, client in termination_clients_sorted.iterrows():
-            min_idx = min(range(num_territories), key=lambda i: (territory_sums[i], territory_counts[i]))
-            territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([client])], ignore_index=True)
-            territory_counts[min_idx] += 1
-            territory_sums[min_idx] += sum(clean_numeric_value(client[col]) for col in balance_columns)
 
     logging.info(f"Total territories created: {len(territories)}")
     for idx, territory in enumerate(territories):
