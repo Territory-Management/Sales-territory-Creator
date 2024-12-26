@@ -26,15 +26,15 @@ def load_data(file) -> Optional[pd.DataFrame]:
         import csv
         dialect = csv.Sniffer().sniff(sample_data)
         separator = dialect.delimiter
-        
+
         file.seek(0)
         df = pd.read_csv(file, sep=separator, dtype=str)
 
         if df.columns[0].startswith('Unnamed:'):
             df.rename(columns={df.columns[0]: 'Code client'}, inplace=True)
-        
+
         return df
-        
+
     except Exception as e:
         logging.error(f"Error loading file: {str(e)}")
         st.error(f"Error loading file: {str(e)}")
@@ -65,11 +65,12 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     grouped_rows = [[] for _ in range(num_territories)]
 
     # Distribute data using a round-robin approach
-    for i, row in enumerate(all_data_sorted.iterrows()):
-        min_idx = min(range(num_territories), key=lambda i: (territory_sums[i] + len(grouped_rows[i])))
-        grouped_rows[min_idx].append(row[1])
+    for _, row in all_data_sorted.iterrows():
+        # Select the territory with the minimum combined total of count and value
+        min_idx = min(range(num_territories), key=lambda i: (territory_counts[i], territory_sums[i]))
+        grouped_rows[min_idx].append(row)
         territory_counts[min_idx] += 1
-        territory_sums[min_idx] += row[1]['_total']
+        territory_sums[min_idx] += row['_total']
 
     # Create DataFrames for each territory
     for i, territory_rows in enumerate(grouped_rows):
