@@ -54,19 +54,21 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     
     logging.info(f"Total termination clients for {current_year} and {next_year} found: {len(termination_clients)}")
 
-    # Calculate total values for all data
+    # Calculate total values for both regular data and termination clients
     regular_data['_total'] = regular_data.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
+    termination_clients['_total'] = termination_clients.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
 
-    # Sort by total value
+    # Sort both datasets by total value
     regular_data_sorted = regular_data.sort_values('_total', ascending=False)
+    termination_clients_sorted = termination_clients.sort_values('_total', ascending=False)
 
+    # Distribute regular data
     territory_sums = [0.0] * num_territories
     territory_counts = [0] * num_territories
     grouped_rows = [[] for _ in range(num_territories)]
 
     for _, row in regular_data_sorted.iterrows():
-        # Select the territory based on both total value and client count
-        min_idx = min(range(num_territories), key=lambda i: (territory_counts[i], territory_sums[i]))
+        min_idx = min(range(num_territories), key=lambda i: (territory_sums[i] / (territory_counts[i] + 1)))
         grouped_rows[min_idx].append(row)
         territory_counts[min_idx] += 1
         territory_sums[min_idx] += row['_total']
@@ -76,19 +78,14 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
         territories[i].insert(0, 'Territory', i + 1)
 
     # Distribute termination clients
-    if not termination_clients.empty:
-        termination_clients['_total'] = termination_clients.apply(lambda row: sum(clean_numeric_value(row[col]) for col in balance_columns), axis=1)
-        termination_clients_sorted = termination_clients.sort_values('_total', ascending=False)
-        
-        for _, client in termination_clients_sorted.iterrows():
-            # Select the territory based on both total value and client count
-            min_idx = min(range(num_territories), key=lambda i: (territory_counts[i], territory_sums[i]))
-            territories[min_idx] = pd.concat(
-                [territories[min_idx], pd.DataFrame([client.drop(labels='_total')])],
-                ignore_index=True
-            )
-            territory_counts[min_idx] += 1
-            territory_sums[min_idx] += client['_total']
+    for _, client in termination_clients_sorted.iterrows():
+        min_idx = min(range(num_territories), key=lambda i: (territory_sums[i] / (territory_counts[i] + 1)))
+        territories[min_idx] = pd.concat(
+            [territories[min_idx], pd.DataFrame([client.drop(labels='_total')])],
+            ignore_index=True
+        )
+        territory_counts[min_idx] += 1
+        territory_sums[min_idx] += client['_total']
     
     logging.info(f"Total territories created: {len(territories)}")
     for idx, territory in enumerate(territories):
