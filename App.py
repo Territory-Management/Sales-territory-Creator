@@ -244,12 +244,16 @@ def main():
                     # Show distribution visualizations
                     for col in balance_columns:
                         st.subheader(f"Distribution of {col}")
-                        data = [territory[col].apply(clean_numeric_value).tolist() 
-                               for territory in territories]
-                        st.bar_chart(pd.DataFrame({
+                        territory_totals = {
                             f"Territory {i+1}": territory[col].apply(clean_numeric_value).sum()
                             for i, territory in enumerate(territories)
-                        }))
+                        }
+                        chart_data = pd.DataFrame({
+                            'Territory': list(territory_totals.keys()),
+                            'Total': list(territory_totals.values())
+                        })
+                        chart_data.set_index('Territory', inplace=True)
+                        st.bar_chart(chart_data)
 
                     # Combined territories download
                     combined = pd.concat(territories, ignore_index=True)
