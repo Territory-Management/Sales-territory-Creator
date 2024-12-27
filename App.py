@@ -41,7 +41,11 @@ def main():
     uploaded_file = st.file_uploader("Upload CSV file", type="csv")
     if uploaded_file:
         try:
-            df = pd.read_csv(uploaded_file, encoding='utf-8', sep=None, engine='python')
+            # Specify the first column as string to preserve leading zeros
+            df = pd.read_csv(uploaded_file, dtype={0: str}, encoding='utf-8', sep=None, engine='python')
+            # Ensure the first column is named correctly
+            if df.columns[0].startswith("Unnamed:"):
+                df.rename(columns={df.columns[0]: "Client ID"}, inplace=True)
         except Exception as e:
             st.error(f"Error reading file: {e}")
             return
@@ -52,7 +56,7 @@ def main():
         balance_columns = st.multiselect(
             "Select columns to balance",
             options=df.columns.tolist(),
-            default=df.columns.tolist()[:1]
+            default=df.columns.tolist()[1:2]  # Skip the first column as it is "Client ID"
         )
 
         if not balance_columns:
@@ -82,7 +86,7 @@ def get_download_link(df: pd.DataFrame, filename: str) -> str:
     """Generate a CSV download link for a DataFrame."""
     csv = df.to_csv(index=False)
     b64 = base64.b64encode(csv.encode()).decode()
-    return f'<a href="data:file/csv;base64,{b64}" download="{filename}</a>'
+    return f'<a href="data:file/csv;base64,{b64}" download="{filename}">Download {filename}</a>'
 
 if __name__ == "__main__":
     main()
