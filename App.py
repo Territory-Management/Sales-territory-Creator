@@ -54,92 +54,109 @@ def filter_rows(df: pd.DataFrame) -> pd.DataFrame:
 
 def distribute_territories(df: pd.DataFrame, num_territories: int, balance_columns: List[str]) -> List[pd.DataFrame]:
     """
-    Distribute clients into territories, balancing both count and total values using a weighted approach
-    and greedy assignment with normalization.
+    Distribute clients into territories with improved balancing for large numbers.
     """
     territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
     
-    # Calculate total values for balancing columns and normalize them
+    # Create a copy and initialize working dataframe
     df = df.copy()
     
-    # Calculate weighted total based on all balance columns
-    df["_total"] = 0
+    # Convert and normalize values for each balance column
     for col in balance_columns:
-        df[f"_normalized_{col}"] = df[col].apply(clean_numeric_value)
-        max_val = df[f"_normalized_{col}"].max()
-        if max_val > 0:
-            df[f"_normalized_{col}"] = df[f"_normalized_{col}"] / max_val
-        df["_total"] += df[f"_normalized_{col}"]
+        # Convert to numeric, handling errors
+        df[f"_clean_{col}"] = df[col].apply(clean_numeric_value)
+        
+        # Calculate percentile ranks instead of raw values for better distribution
+        df[f"_rank_{col}"] = df[f"_clean_{col}"].rank(pct=True)
     
-    # Sort by total value to handle largest accounts first
-    df_sorted = df.sample(frac=1, random_state=42).sort_values("_total", ascending=False)
+    # Calculate composite score using percentile ranks
+    df["_score"] = sum(df[f"_rank_{col}"] for col in balance_columns) / len(balance_columns)
     
-    # Initialize tracking variables
+    # Sort by composite score
+    df_sorted = df.sort_values("_score", ascending=False)
+    
+    # Initialize metrics tracking
     territory_metrics = {i: {
         "count": 0,
-        "total": 0.0,
-        "column_totals": {col: 0.0 for col in balance_columns}
+        "values": {col: 0.0 for col in balance_columns}
     } for i in range(num_territories)}
     
-    target_count = len(df) / num_territories
-    
-    def calculate_territory_score(territory_idx: int, row: pd.Series) -> float:
-        """
-        Calculate a score for assigning a row to a territory based on multiple factors.
-        Lower score is better.
-        """
+    def get_territory_score(territory_idx: int, row: pd.Series) -> float:
+        """Calculate territory score based on both count and value balance."""
         metrics = territory_metrics[territory_idx]
         
-        # Count balance factor (how far from target count)
-        count_factor = metrics["count"] / target_count if target_count > 0 else 0
+        # Get current averages across all territories
+        avg_count = sum(t["count"] for t in territory_metrics.values()) / num_territories
+        avg_values = {
+            col: sum(t["values"][col] for t in territory_metrics.values()) / num_territories
+            for col in balance_columns
+        }
         
-        # Value balance factors for each column
-        value_factors = []
+        # Calculate relative imbalances
+        count_imbalance = (metrics["count"] - avg_count) / (avg_count + 1)  # Add 1 to avoid division by zero
+        
+        value_imbalances = []
         for col in balance_columns:
-            territory_total = metrics["column_totals"][col]
-            row_value = clean_numeric_value(row[col])
-            if row_value > 0:
-                value_factors.append(territory_total / row_value)
+            current_val = metrics["values"][col]
+            avg_val = avg_values[col]
+            if avg_val != 0:
+                value_imbalances.append((current_val - avg_val) / avg_val)
+            else:
+                value_imbalances.append(0)
         
-        avg_value_factor = sum(value_factors) / len(value_factors) if value_factors else 1
+        avg_value_imbalance = sum(value_imbalances) / len(value_imbalances) if value_imbalances else 0
         
-        # Weights for different factors
-        COUNT_WEIGHT = 0.4
-        VALUE_WEIGHT = 0.6
+        # Combine scores with weights
+        COUNT_WEIGHT = 0.5
+        VALUE_WEIGHT = 0.5
         
-        return (count_factor * COUNT_WEIGHT) + (avg_value_factor * VALUE_WEIGHT)
+        return abs(count_imbalance) * COUNT_WEIGHT + abs(avg_value_imbalance) * VALUE_WEIGHT
     
-    # Assign rows to territories
-    for _, row in df_sorted.iterrows():
-        # Find the territory with the lowest combined score
-        best_territory = min(range(num_territories),
-                           key=lambda i: calculate_territory_score(i, row))
+    # Distribute rows using round-robin for largest accounts
+    large_account_threshold = 0.8  # Top 20% of accounts
+    large_accounts = df_sorted[df_sorted["_score"] >= df_sorted["_score"].quantile(large_account_threshold)]
+    regular_accounts = df_sorted[df_sorted["_score"] < df_sorted["_score"].quantile(large_account_threshold)]
+    
+    # Distribute large accounts round-robin
+    for idx, row in large_accounts.iterrows():
+        territory_idx = idx % num_territories
+        territories[territory_idx] = pd.concat([territories[territory_idx], pd.DataFrame([row])], ignore_index=True)
         
-        # Assign to the selected territory
-        territories[best_territory] = pd.concat([territories[best_territory], 
-                                              pd.DataFrame([row])], 
-                                              ignore_index=True)
-        
-        # Update territory metrics
-        territory_metrics[best_territory]["count"] += 1
-        territory_metrics[best_territory]["total"] += row["_total"]
+        # Update metrics
+        territory_metrics[territory_idx]["count"] += 1
         for col in balance_columns:
-            territory_metrics[best_territory]["column_totals"][col] += clean_numeric_value(row[col])
+            territory_metrics[territory_idx]["values"][col] += row[f"_clean_{col}"]
+    
+    # Distribute remaining accounts using scoring
+    for _, row in regular_accounts.iterrows():
+        # Find best territory based on current balance
+        best_territory = min(range(num_territories), 
+                           key=lambda i: get_territory_score(i, row))
+        
+        # Assign to best territory
+        territories[best_territory] = pd.concat([territories[best_territory], pd.DataFrame([row])], ignore_index=True)
+        
+        # Update metrics
+        territory_metrics[best_territory]["count"] += 1
+        for col in balance_columns:
+            territory_metrics[best_territory]["values"][col] += row[f"_clean_{col}"]
     
     # Clean up temporary columns and add territory numbers
-    normalized_cols = ["_total"] + [f"_normalized_{col}" for col in balance_columns]
+    temp_cols = (["_score"] + 
+                [f"_clean_{col}" for col in balance_columns] + 
+                [f"_rank_{col}" for col in balance_columns])
+    
     for i in range(num_territories):
-        territories[i] = territories[i].drop(columns=normalized_cols)
+        territories[i] = territories[i].drop(columns=temp_cols, errors='ignore')
         territories[i].insert(0, "Territory", i + 1)
         
         # Log distribution metrics
         logging_msg = f"Territory {i+1} - Count: {territory_metrics[i]['count']}"
         for col in balance_columns:
-            logging_msg += f", {col} Total: {territory_metrics[i]['column_totals'][col]:.2f}"
+            logging_msg += f", {col}: {territory_metrics[i]['values'][col]:,.2f}"
         logging.info(logging_msg)
     
     return territories
-
 def get_territory_metrics(territories: List[pd.DataFrame], balance_columns: List[str]) -> pd.DataFrame:
     """Calculate detailed metrics for each territory including variance statistics."""
     metrics = []
