@@ -28,12 +28,12 @@ def create_balanced_territories(df, num_territories):
 
     for index, row in df_sorted.iterrows():
         best_territory = min(range(num_territories), key=lambda i: calculate_score(territories[i], row))
-        territories[best_territory] = territories[best_territory].append(row)
+        territories[best_territory] = pd.concat([territories[best_territory], pd.DataFrame([row])], ignore_index=True)
 
     for extra_index in range(extra_rows):
         row = df_sorted.iloc[-(extra_index + 1)]
         best_territory = min(range(num_territories), key=lambda i: calculate_score(territories[i], row))
-        territories[best_territory] = territories[best_territory].append(row)
+        territories[best_territory] = pd.concat([territories[best_territory], pd.DataFrame([row])], ignore_index=True)
 
     return territories
 
@@ -43,7 +43,6 @@ def main():
     uploaded_file = st.file_uploader("Upload CSV file", type="csv")
     if uploaded_file:
         try:
-            # Attempt to read the file with different delimiters and encodings if necessary
             df = pd.read_csv(uploaded_file, encoding='utf-8', sep=None, engine='python')
         except Exception as e:
             st.error(f"Error reading file: {e}")
