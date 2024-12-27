@@ -112,6 +112,9 @@ def get_territory_metrics(territories: List[pd.DataFrame], balance_columns: List
     for i, territory in enumerate(territories):
         metric = {"Territory": i + 1, "Count": len(territory)}
         for col in balance_columns:
+            if col not in territory.columns:
+                logging.warning(f"Column '{col}' is missing in Territory {i + 1}")
+                continue
             values = territory[col].apply(clean_numeric_value)
             metric.update({
                 f"{col}_total": values.sum(),
