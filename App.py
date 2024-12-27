@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import re
+import base64
 
 def clean_numeric_value(value) -> float:
     """Convert a value to a numeric type, handling strings and non-numeric characters."""
@@ -41,7 +42,12 @@ def main():
 
     uploaded_file = st.file_uploader("Upload CSV file", type="csv")
     if uploaded_file:
-        df = pd.read_csv(uploaded_file)
+        try:
+            # Attempt to read the file with different delimiters and encodings if necessary
+            df = pd.read_csv(uploaded_file, encoding='utf-8', sep=None, engine='python')
+        except Exception as e:
+            st.error(f"Error reading file: {e}")
+            return
 
         st.write("Data Preview:", df.head())
         st.write("Column names:", df.columns.tolist())
