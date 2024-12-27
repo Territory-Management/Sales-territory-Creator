@@ -69,14 +69,17 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     total_clients = len(df_sorted)
     avg_clients_per_territory = total_clients / num_territories
 
-    # Assign rows to territories in a balanced way
+    # Initial round-robin distribution
     for idx, row in df_sorted.iterrows():
-        # Calculate dynamic weights
-        progress_ratio = idx / total_clients
-        weight_count = 0.7 * (1 - progress_ratio) + 0.3
+        territories[idx % num_territories].append(row)
+        territory_counts[idx % num_territories] += 1
+        territory_sums[idx % num_territories] += row["_total"]
+
+    # Adjust distribution dynamically
+    for idx, row in df_sorted.iterrows():
+        weight_count = 0.9 if idx < len(df_sorted) * 0.2 else 0.5
         weight_sum = 1 - weight_count
 
-        # Calculate a composite score for each territory
         scores = [
             (
                 territory_counts[i] * weight_count +
