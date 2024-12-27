@@ -58,8 +58,15 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     # Initialize empty territories
     territories = [[] for _ in range(num_territories)]
 
-    # Clean and calculate total values for balancing columns
-    cleaned_values = df[balance_columns].applymap(clean_numeric_value)
+    # Validate balance_columns and ensure numeric conversion
+    try:
+        cleaned_values = df[balance_columns].applymap(clean_numeric_value)
+    except KeyError as e:
+        logging.error(f"Missing columns for balancing: {e}")
+        st.error(f"Missing columns for balancing: {e}")
+        return []
+
+    # Calculate total values for balancing
     df["_total"] = cleaned_values.sum(axis=1)
 
     # Sort rows by total value (descending) to distribute high-value clients first
@@ -87,13 +94,17 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
         territory_counts[best_territory] += 1
         territory_sums[best_territory] += row["_total"]
 
-    # Convert territories into DataFrames and drop helper columns
-    territories = [pd.DataFrame(territory).drop(columns=["_total"]) for territory in territories]
+    # Convert territories into DataFrames
+    result_territories = []
     for i, territory in enumerate(territories):
-        territory.insert(0, "Territory", i + 1)
+        territory_df = pd.DataFrame(territory)
+        if "_total" in territory_df.columns:
+            territory_df.drop(columns=["_total"], inplace=True)
+        territory_df.insert(0, "Territory", i + 1)
+        result_territories.append(territory_df)
 
     logging.info(f"Territories balanced: {num_territories}")
-    return territories
+    return result_territories
 
 def get_territory_metrics(territories: List[pd.DataFrame], balance_columns: List[str]) -> pd.DataFrame:
     """Calculate metrics for each territory."""
