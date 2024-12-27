@@ -1,5 +1,7 @@
+import streamlit as st
 import pandas as pd
 import numpy as np
+import re
 
 def clean_numeric_value(value) -> float:
     """Convert a value to a numeric type, handling strings and non-numeric characters."""
@@ -10,34 +12,23 @@ def clean_numeric_value(value) -> float:
 
 def create_balanced_territories(df, num_territories):
     """Distribute rows into territories with balanced row count and column sums."""
-    # Calculate total number of rows
     total_rows = len(df)
-
-    # Determine rows per territory and handle any remainders
     rows_per_territory = total_rows // num_territories
     extra_rows = total_rows % num_territories
-
-    # Calculate the target sum for each column
     target_sums = df.applymap(clean_numeric_value).sum() / num_territories
-
-    # Initialize territories
     territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
 
-    # Score function to determine best fit for a row
     def calculate_score(territory, row):
         current_sums = territory.applymap(clean_numeric_value).sum()
         projected_sums = current_sums + row.apply(clean_numeric_value)
         return np.sum((projected_sums - target_sums) ** 2)
 
-    # Sort rows by their total value to distribute high-value rows early
     df_sorted = df.assign(_total=df.applymap(clean_numeric_value).sum(axis=1)).sort_values('_total', ascending=False).drop(columns='_total')
 
-    # Distribute rows into territories
     for index, row in df_sorted.iterrows():
         best_territory = min(range(num_territories), key=lambda i: calculate_score(territories[i], row))
         territories[best_territory] = territories[best_territory].append(row)
 
-    # Distribute any extra rows
     for extra_index in range(extra_rows):
         row = df_sorted.iloc[-(extra_index + 1)]
         best_territory = min(range(num_territories), key=lambda i: calculate_score(territories[i], row))
@@ -45,8 +36,50 @@ def create_balanced_territories(df, num_territories):
 
     return territories
 
-# Example usage
-df = pd.read_csv('data.csv')
-territories = create_balanced_territories(df, 3)
-for i, territory in enumerate(territories):
-    territory.to_csv(f'territory_{i+1}.csv', index=False)
+def main():
+    st.title("Territory Distribution Tool")
+
+    uploaded_file = st.file_uploader("Upload CSV file", type="csv")
+    if uploaded_file:
+        df = pd.read_csv(uploaded_file)
+
+        st.write("Data Preview:", df.head())
+        st.write("Column names:", df.columns.tolist())
+
+        balance_columns = st.multiselect(
+            "Select columns to balance",
+            options=df.columns.tolist(),
+            default=df.columns.tolist()[:1]
+        )
+
+        if not balance_columns:
+            st.error("Please select at least one column to balance")
+            return
+
+        num_territories = st.number_input(
+            "Number of territories",
+            min_value=2,
+            max_value=len(df),
+            value=2
+        )
+
+        if st.button("Create Territories"):
+            with st.spinner("Distributing territories..."):
+                territories = create_balanced_territories(df[balance_columns], num_territories)
+
+            st.subheader("Territory Metrics")
+            for i, territory in enumerate(territories):
+                st.write(f"Territory {i+1} ({len(territory)} accounts)")
+                st.write(territory.describe())
+
+            combined = pd.concat(territories, ignore_index=True)
+            st.markdown(get_download_link(combined, "all_territories.csv"), unsafe_allow_html=True)
+
+def get_download_link(df: pd.DataFrame, filename: str) -> str:
+    """Generate a CSV download link for a DataFrame."""
+    csv = df.to_csv(index=False)
+    b64 = base64.b64encode(csv.encode()).decode()
+    return f'<a href="data:file/csv;base64,{b64}" download="{filename}">Download {filename}</a>'
+
+if __name__ == "__main__":
+    main()
