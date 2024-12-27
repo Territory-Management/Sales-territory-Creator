@@ -55,7 +55,7 @@ def filter_rows(df: pd.DataFrame) -> pd.DataFrame:
 
 def distribute_territories(df: pd.DataFrame, num_territories: int, balance_columns: List[str]) -> List[pd.DataFrame]:
     """Distribute clients into territories, balancing both count and total value."""
-    territories = [[] for _ in range(num_territories)]
+    territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
 
     # Calculate total values for balancing columns
     df["_total"] = df[balance_columns].applymap(clean_numeric_value).sum(axis=1)
@@ -71,7 +71,7 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
 
     # Initial round-robin distribution
     for idx, row in df_sorted.iterrows():
-        territories[idx % num_territories].append(row)
+        territories[idx % num_territories] = pd.concat([territories[idx % num_territories], pd.DataFrame([row])], ignore_index=True)
         territory_counts[idx % num_territories] += 1
         territory_sums[idx % num_territories] += row["_total"]
 
@@ -90,14 +90,14 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
         ]
         min_idx = np.argmin(scores)
 
-        territories[min_idx].append(row)
+        territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([row])], ignore_index=True)
         territory_counts[min_idx] += 1
         territory_sums[min_idx] += row["_total"]
 
-    # Convert lists of rows into DataFrames
-    territories = [pd.DataFrame(territory).drop(columns=["_total"]) for territory in territories]
-    for i, territory in enumerate(territories):
-        territory.insert(0, "Territory", i + 1)
+    # Final rebalancing to ensure equity
+    for i in range(num_territories):
+        territories[i] = territories[i].drop(columns=["_total"])
+        territories[i].insert(0, "Territory", i + 1)
 
     logging.info(f"Total territories created: {len(territories)}")
     return territories
