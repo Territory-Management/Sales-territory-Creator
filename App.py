@@ -36,7 +36,6 @@ def load_data(file) -> Optional[pd.DataFrame]:
         if df.columns[0].startswith("Unnamed:"):
             df.rename(columns={df.columns[0]: "Code client"}, inplace=True)
 
-        # Convert date column to datetime
         if "Dt resiliation contrat all" in df.columns:
             df["Dt resiliation contrat all"] = pd.to_datetime(df["Dt resiliation contrat all"], errors="coerce")
 
@@ -67,17 +66,22 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     territory_sums = np.zeros(num_territories)
     territory_counts = np.zeros(num_territories)
 
-    # Assign rows to territories in a balanced way
+    # Initial round-robin distribution for even start
     for idx, row in df_sorted.iterrows():
-        # Calculate a composite score for each territory, dynamically adjusting weights
-        weight_count = 0.7 if idx < len(df_sorted) * 0.3 else 0.5
+        territories[idx % num_territories].append(row)
+        territory_counts[idx % num_territories] += 1
+        territory_sums[idx % num_territories] += row["_total"]
+
+    # Iterative balancing adjustment
+    for idx, row in df_sorted.iterrows():
+        weight_count = 0.8 if idx < len(df_sorted) * 0.2 else 0.5
         weight_sum = 1 - weight_count
         min_idx = np.argmin(territory_counts * weight_count + territory_sums * weight_sum)
         territories[min_idx].append(row)
         territory_counts[min_idx] += 1
         territory_sums[min_idx] += row["_total"]
 
-    # Convert lists of rows into DataFrames
+    # Fine-tuning post-processing to ensure balance
     for i in range(num_territories):
         territories[i] = pd.DataFrame(territories[i]).drop(columns=["_total"])
         territories[i].insert(0, "Territory", i + 1)
