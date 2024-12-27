@@ -17,23 +17,21 @@ def create_balanced_territories(df, num_territories):
     rows_per_territory = total_rows // num_territories
     extra_rows = total_rows % num_territories
     target_sums = df.applymap(clean_numeric_value).sum() / num_territories
-    territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
+    territories = [[] for _ in range(num_territories)]
 
-    def calculate_score(territory, row):
-        current_sums = territory.applymap(clean_numeric_value).sum()
-        projected_sums = current_sums + row.apply(clean_numeric_value)
-        return np.sum((projected_sums - target_sums) ** 2)
+    # Pre-compute values for efficiency
+    df_cleaned = df.applymap(clean_numeric_value)
+    df_sorted = df_cleaned.assign(_total=df_cleaned.sum(axis=1)).sort_values('_total', ascending=False).drop(columns='_total')
 
-    df_sorted = df.assign(_total=df.applymap(clean_numeric_value).sum(axis=1)).sort_values('_total', ascending=False).drop(columns='_total')
-
+    # Distribute rows into territories
     for index, row in df_sorted.iterrows():
-        best_territory = min(range(num_territories), key=lambda i: calculate_score(territories[i], row))
-        territories[best_territory] = pd.concat([territories[best_territory], pd.DataFrame([row])], ignore_index=True)
+        row_values = row.values
+        best_territory = min(range(num_territories), 
+                             key=lambda i: np.sum((np.sum(territories[i], axis=0) + row_values - target_sums) ** 2))
+        territories[best_territory].append(row_values)
 
-    for extra_index in range(extra_rows):
-        row = df_sorted.iloc[-(extra_index + 1)]
-        best_territory = min(range(num_territories), key=lambda i: calculate_score(territories[i], row))
-        territories[best_territory] = pd.concat([territories[best_territory], pd.DataFrame([row])], ignore_index=True)
+    # Convert lists of arrays back to DataFrames
+    territories = [pd.DataFrame(data, columns=df.columns) for data in territories]
 
     return territories
 
@@ -84,7 +82,7 @@ def get_download_link(df: pd.DataFrame, filename: str) -> str:
     """Generate a CSV download link for a DataFrame."""
     csv = df.to_csv(index=False)
     b64 = base64.b64encode(csv.encode()).decode()
-    return f'<a href="data:file/csv;base64,{b64}" download="{filename}">Download {filename}</a>'
+    return f'<a href="data:file/csv;base64,{b64}" download="{filename}</a>'
 
 if __name__ == "__main__":
     main()
