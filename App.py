@@ -1,117 +1,52 @@
-import streamlit as st
 import pandas as pd
 import numpy as np
 
-def clean_numeric_value(value):
-    """Clean and convert a value to float."""
+def clean_numeric_value(value) -> float:
+    """Convert a value to a numeric type, handling strings and non-numeric characters."""
     try:
-        return float(value)
-    except ValueError:
+        return float(re.sub(r"[^\d.-]", "", str(value)))
+    except (ValueError, TypeError):
         return 0.0
 
-def distribute_territories(df, num_territories, balance_columns):
-    """
-    Distribute clients into territories, balancing count and total value.
+def create_balanced_territories(df, num_territories):
+    """Distribute rows into territories with balanced row count and column sums."""
+    # Calculate total number of rows
+    total_rows = len(df)
 
-    Args:
-        df (pd.DataFrame): Input dataframe.
-        num_territories (int): Number of territories.
-        balance_columns (list): Columns to balance.
+    # Determine rows per territory and handle any remainders
+    rows_per_territory = total_rows // num_territories
+    extra_rows = total_rows % num_territories
 
-    Returns:
-        pd.DataFrame: DataFrame with an added 'Territory' column.
-    """
-    # Clean and ensure numeric values in balance columns
-    df[balance_columns] = df[balance_columns].applymap(clean_numeric_value)
-
-    # Calculate total value for each row
-    df["_total"] = df[balance_columns].sum(axis=1)
-
-    # Sort rows randomly to distribute them more evenly
-    df = df.sample(frac=1, random_state=42).reset_index(drop=True)
+    # Calculate the target sum for each column
+    target_sums = df.applymap(clean_numeric_value).sum() / num_territories
 
     # Initialize territories
-    territories = [[] for _ in range(num_territories)]
+    territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
 
-    # Calculate balancing targets
-    total_clients = len(df)
-    avg_clients_per_territory = total_clients / num_territories
-    total_value = df["_total"].sum()
-    avg_value_per_territory = total_value / num_territories
+    # Score function to determine best fit for a row
+    def calculate_score(territory, row):
+        current_sums = territory.applymap(clean_numeric_value).sum()
+        projected_sums = current_sums + row.apply(clean_numeric_value)
+        return np.sum((projected_sums - target_sums) ** 2)
 
-    # Initialize counters
-    territory_sums = np.zeros(num_territories)
-    territory_counts = np.zeros(num_territories)
+    # Sort rows by their total value to distribute high-value rows early
+    df_sorted = df.assign(_total=df.applymap(clean_numeric_value).sum(axis=1)).sort_values('_total', ascending=False).drop(columns='_total')
 
-    # Distribute rows to territories
-    for idx, row in df.iterrows():
-        scores = [
-            abs(territory_counts[i] + 1 - avg_clients_per_territory) +
-            abs(territory_sums[i] + row["_total"] - avg_value_per_territory)
-            for i in range(num_territories)
-        ]
-        best_territory = np.argmin(scores)
-        territories[best_territory].append(row)
-        territory_counts[best_territory] += 1
-        territory_sums[best_territory] += row["_total"]
+    # Distribute rows into territories
+    for index, row in df_sorted.iterrows():
+        best_territory = min(range(num_territories), key=lambda i: calculate_score(territories[i], row))
+        territories[best_territory] = territories[best_territory].append(row)
 
-    # Combine territories into a single DataFrame
-    result = pd.concat(
-        [pd.DataFrame(territory).assign(Territory=i + 1) for i, territory in enumerate(territories)],
-        ignore_index=True
-    )
+    # Distribute any extra rows
+    for extra_index in range(extra_rows):
+        row = df_sorted.iloc[-(extra_index + 1)]
+        best_territory = min(range(num_territories), key=lambda i: calculate_score(territories[i], row))
+        territories[best_territory] = territories[best_territory].append(row)
 
-    # Drop helper column
-    result.drop(columns="_total", inplace=True)
+    return territories
 
-    return result
-
-def main():
-    st.title("Sales Territory Balancer")
-
-    # File uploader
-    uploaded_file = st.file_uploader("Upload your CSV file", type="csv")
-
-    if uploaded_file is not None:
-        # Load data
-        df = pd.read_csv(uploaded_file)
-
-        # Display data preview
-        st.subheader("Uploaded Data")
-        st.write(df.head())
-
-        # Define columns to balance
-        balance_columns = st.multiselect(
-            "Select columns to balance:",
-            options=df.columns.tolist(),
-            default=[
-                "Mrr saas quadra entreprise", "Saas comptabilite", "Saas paie", 
-                "Saas ga gi", "Saas gestion commerciale"
-            ]
-        )
-
-        # Number of territories
-        num_territories = st.number_input("Number of territories:", min_value=2, max_value=100, value=30, step=1)
-
-        if st.button("Distribute Territories"):
-            try:
-                # Distribute territories
-                distributed_df = distribute_territories(df, num_territories, balance_columns)
-
-                # Display results
-                st.subheader("Distributed Territories")
-                st.write(distributed_df)
-
-                # Allow download of results
-                csv = distributed_df.to_csv(index=False).encode('utf-8')
-                st.download_button(
-                    label="Download CSV",
-                    data=csv,
-                    file_name="distributed_territories.csv",
-                    mime="text/csv"
-                )
-            except Exception as e:
-                st.error(f"An error occurred: {e}")
-
-if __name__ == "__main__":
-    main()
+# Example usage
+df = pd.read_csv('data.csv')
+territories = create_balanced_territories(df, 3)
+for i, territory in enumerate(territories):
+    territory.to_csv(f'territory_{i+1}.csv', index=False)
