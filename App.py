@@ -54,54 +54,45 @@ def filter_rows(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def distribute_territories(df: pd.DataFrame, num_territories: int, balance_columns: List[str]) -> List[pd.DataFrame]:
-    """Distribute clients into territories, balancing both count and total value."""
+    """Distribute clients into territories, balancing count and total value."""
+    # Initialize empty territories
     territories = [[] for _ in range(num_territories)]
 
-    # Calculate total values for balancing columns
+    # Clean and calculate total values for balancing columns
     cleaned_values = df[balance_columns].applymap(clean_numeric_value)
     df["_total"] = cleaned_values.sum(axis=1)
 
-    # Shuffle and sort by total value
+    # Sort rows by total value (descending) to distribute high-value clients first
     df_sorted = df.sample(frac=1, random_state=42).sort_values("_total", ascending=False).reset_index(drop=True)
 
+    # Balancing targets
+    total_clients = len(df_sorted)
+    avg_clients_per_territory = total_clients / num_territories
+    total_value = df_sorted["_total"].sum()
+    avg_value_per_territory = total_value / num_territories
+
+    # Initialize counters for each territory
     territory_sums = np.zeros(num_territories)
     territory_counts = np.zeros(num_territories)
 
-    total_clients = len(df_sorted)
-    avg_clients_per_territory = total_clients / num_territories
-
-    # Initial round-robin distribution
-    for idx in range(total_clients):
-        min_idx = idx % num_territories
-        territories[min_idx].append(df_sorted.iloc[idx])
-        territory_counts[min_idx] += 1
-        territory_sums[min_idx] += df_sorted.iloc[idx]["_total"]
-
-    # Adjust distribution dynamically
-    for idx in range(total_clients):
-        weight_count = 0.9 if idx < total_clients * 0.2 else 0.5
-        weight_sum = 1 - weight_count
-
+    # Assign each client to the best territory based on balancing score
+    for idx, row in df_sorted.iterrows():
         scores = [
-            (
-                territory_counts[i] * weight_count +
-                territory_sums[i] * weight_sum +
-                (float('inf') if territory_counts[i] > avg_clients_per_territory * 1.1 else 0)
-            )
+            abs(territory_counts[i] + 1 - avg_clients_per_territory) + 
+            abs(territory_sums[i] + row["_total"] - avg_value_per_territory)
             for i in range(num_territories)
         ]
-        min_idx = np.argmin(scores)
+        best_territory = np.argmin(scores)
+        territories[best_territory].append(row)
+        territory_counts[best_territory] += 1
+        territory_sums[best_territory] += row["_total"]
 
-        territories[min_idx].append(df_sorted.iloc[idx])
-        territory_counts[min_idx] += 1
-        territory_sums[min_idx] += df_sorted.iloc[idx]["_total"]
-
-    # Convert lists of rows into DataFrames
+    # Convert territories into DataFrames and drop helper columns
     territories = [pd.DataFrame(territory).drop(columns=["_total"]) for territory in territories]
     for i, territory in enumerate(territories):
         territory.insert(0, "Territory", i + 1)
 
-    logging.info(f"Total territories created: {len(territories)}")
+    logging.info(f"Territories balanced: {num_territories}")
     return territories
 
 def get_territory_metrics(territories: List[pd.DataFrame], balance_columns: List[str]) -> pd.DataFrame:
