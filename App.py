@@ -1,91 +1,52 @@
 import streamlit as st
 import pandas as pd
-import base64
-import logging
-import re
-from typing import List, Optional
-from datetime import datetime
 import numpy as np
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-
-def clean_numeric_value(value) -> float:
+def clean_numeric_value(value):
     """Clean and convert a value to float."""
-    if pd.isna(value):
-        return 0.0
     try:
-        str_value = str(value)
-        clean_value = re.sub(r"[^\d.-]", "", str_value)
-        return float(clean_value) if clean_value else 0.0
-    except (ValueError, TypeError):
+        return float(value)
+    except ValueError:
         return 0.0
 
-def load_data(file) -> Optional[pd.DataFrame]:
-    """Load CSV data and preprocess it."""
-    try:
-        file.seek(0)
-        sample_data = file.read(1024).decode("utf-8")
-        import csv
-        dialect = csv.Sniffer().sniff(sample_data)
-        separator = dialect.delimiter
+def distribute_territories(df, num_territories, balance_columns):
+    """
+    Distribute clients into territories, balancing count and total value.
 
-        file.seek(0)
-        df = pd.read_csv(file, sep=separator, dtype=str, encoding="utf-8")
+    Args:
+        df (pd.DataFrame): Input dataframe.
+        num_territories (int): Number of territories.
+        balance_columns (list): Columns to balance.
 
-        if df.columns[0].startswith("Unnamed:"):
-            df.rename(columns={df.columns[0]: "Code client"}, inplace=True)
+    Returns:
+        pd.DataFrame: DataFrame with an added 'Territory' column.
+    """
+    # Clean and ensure numeric values in balance columns
+    df[balance_columns] = df[balance_columns].applymap(clean_numeric_value)
 
-        if "Dt resiliation contrat all" in df.columns:
-            df["Dt resiliation contrat all"] = pd.to_datetime(df["Dt resiliation contrat all"], errors="coerce")
+    # Calculate total value for each row
+    df["_total"] = df[balance_columns].sum(axis=1)
 
-        return df
-    except Exception as e:
-        logging.error(f"Error loading file: {str(e)}")
-        st.error(f"Error loading file: {str(e)}")
-        return None
+    # Sort rows randomly to distribute them more evenly
+    df = df.sample(frac=1, random_state=42).reset_index(drop=True)
 
-def filter_rows(df: pd.DataFrame) -> pd.DataFrame:
-    """Filter rows based on 'Dt resiliation contrat all' date."""
-    current_year = datetime.now().year
-    next_year = current_year + 1
-    if "Dt resiliation contrat all" in df.columns:
-        return df[(df["Dt resiliation contrat all"].dt.year > next_year) | df["Dt resiliation contrat all"].isna()]
-    return df
-
-def distribute_territories(df: pd.DataFrame, num_territories: int, balance_columns: List[str]) -> List[pd.DataFrame]:
-    """Distribute clients into territories, balancing count and total value."""
-    # Initialize empty territories
+    # Initialize territories
     territories = [[] for _ in range(num_territories)]
 
-    # Validate balance_columns and ensure numeric conversion
-    try:
-        cleaned_values = df[balance_columns].applymap(clean_numeric_value)
-    except KeyError as e:
-        logging.error(f"Missing columns for balancing: {e}")
-        st.error(f"Missing columns for balancing: {e}")
-        return []
-
-    # Calculate total values for balancing
-    df["_total"] = cleaned_values.sum(axis=1)
-
-    # Sort rows by total value (descending) to distribute high-value clients first
-    df_sorted = df.sample(frac=1, random_state=42).sort_values("_total", ascending=False).reset_index(drop=True)
-
-    # Balancing targets
-    total_clients = len(df_sorted)
+    # Calculate balancing targets
+    total_clients = len(df)
     avg_clients_per_territory = total_clients / num_territories
-    total_value = df_sorted["_total"].sum()
+    total_value = df["_total"].sum()
     avg_value_per_territory = total_value / num_territories
 
-    # Initialize counters for each territory
+    # Initialize counters
     territory_sums = np.zeros(num_territories)
     territory_counts = np.zeros(num_territories)
 
-    # Assign each client to the best territory based on balancing score
-    for idx, row in df_sorted.iterrows():
+    # Distribute rows to territories
+    for idx, row in df.iterrows():
         scores = [
-            abs(territory_counts[i] + 1 - avg_clients_per_territory) + 
+            abs(territory_counts[i] + 1 - avg_clients_per_territory) +
             abs(territory_sums[i] + row["_total"] - avg_value_per_territory)
             for i in range(num_territories)
         ]
@@ -94,102 +55,63 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
         territory_counts[best_territory] += 1
         territory_sums[best_territory] += row["_total"]
 
-    # Convert territories into DataFrames
-    result_territories = []
-    for i, territory in enumerate(territories):
-        territory_df = pd.DataFrame(territory)
-        if "_total" in territory_df.columns:
-            territory_df.drop(columns=["_total"], inplace=True)
-        territory_df.insert(0, "Territory", i + 1)
-        result_territories.append(territory_df)
+    # Combine territories into a single DataFrame
+    result = pd.concat(
+        [pd.DataFrame(territory).assign(Territory=i + 1) for i, territory in enumerate(territories)],
+        ignore_index=True
+    )
 
-    logging.info(f"Territories balanced: {num_territories}")
-    return result_territories
+    # Drop helper column
+    result.drop(columns="_total", inplace=True)
 
-def get_territory_metrics(territories: List[pd.DataFrame], balance_columns: List[str]) -> pd.DataFrame:
-    """Calculate metrics for each territory."""
-    metrics = []
-    for i, territory in enumerate(territories):
-        metric = {"Territory": i + 1, "Count": len(territory)}
-        for col in balance_columns:
-            if col not in territory.columns:
-                logging.warning(f"Column '{col}' is missing in Territory {i + 1}")
-                continue
-            values = territory[col].apply(clean_numeric_value)
-            metric.update({
-                f"{col}_total": values.sum(),
-                f"{col}_avg": values.mean(),
-                f"{col}_min": values.min(),
-                f"{col}_max": values.max()
-            })
-        metrics.append(metric)
-    return pd.DataFrame(metrics)
-
-def get_download_link(df: pd.DataFrame, filename: str) -> str:
-    """Generate a CSV download link for a DataFrame."""
-    csv = df.to_csv(index=False)
-    b64 = base64.b64encode(csv.encode()).decode()
-    return f'<a href="data:file/csv;base64,{b64}" download="{filename}">Download {filename}</a>'
+    return result
 
 def main():
-    st.title("Territory Distribution Tool")
+    st.title("Sales Territory Balancer")
 
-    uploaded_file = st.file_uploader("Upload CSV file", type="csv")
-    if uploaded_file:
-        df = load_data(uploaded_file)
+    # File uploader
+    uploaded_file = st.file_uploader("Upload your CSV file", type="csv")
 
-        if df is not None:
-            st.write("Data Preview:", df.head())
-            st.write("Column names:", df.columns.tolist())
+    if uploaded_file is not None:
+        # Load data
+        df = pd.read_csv(uploaded_file)
 
-            # Filter rows based on resiliation date
-            df_filtered = filter_rows(df)
-            st.write("Filtered Data Preview (Rows with valid resiliation dates):", df_filtered.head())
+        # Display data preview
+        st.subheader("Uploaded Data")
+        st.write(df.head())
 
-            # Select balance columns
-            available_columns = [col for col in df_filtered.columns if col not in ["Code client", "Dt resiliation contrat all"]]
-            st.write("Available columns for balancing:", available_columns)
+        # Define columns to balance
+        balance_columns = st.multiselect(
+            "Select columns to balance:",
+            options=df.columns.tolist(),
+            default=[
+                "Mrr saas quadra entreprise", "Saas comptabilite", "Saas paie", 
+                "Saas ga gi", "Saas gestion commerciale"
+            ]
+        )
 
-            balance_columns = st.multiselect(
-                "Select columns to balance",
-                options=available_columns,
-                default=available_columns[:1] if available_columns else []
-            )
+        # Number of territories
+        num_territories = st.number_input("Number of territories:", min_value=2, max_value=100, value=30, step=1)
 
-            if not balance_columns:
-                st.error("Please select at least one column to balance")
-                return
+        if st.button("Distribute Territories"):
+            try:
+                # Distribute territories
+                distributed_df = distribute_territories(df, num_territories, balance_columns)
 
-            # Number of territories
-            num_territories = st.number_input(
-                "Number of territories",
-                min_value=2,
-                max_value=len(df_filtered),
-                value=2
-            )
+                # Display results
+                st.subheader("Distributed Territories")
+                st.write(distributed_df)
 
-            if st.button("Create Territories"):
-                with st.spinner("Distributing territories..."):
-                    territories = distribute_territories(df_filtered, num_territories, balance_columns)
-                
-                metrics = get_territory_metrics(territories, balance_columns)
-
-                # Display metrics
-                st.subheader("Territory Metrics")
-                st.write(metrics)
-
-                # Combined territories
-                combined = pd.concat(territories, ignore_index=True)
-                st.markdown(get_download_link(combined, "all_territories.csv"), unsafe_allow_html=True)
-
-                # Individual territory downloads
-                for i, territory in enumerate(territories):
-                    with st.expander(f"Territory {i+1} ({len(territory)} accounts)"):
-                        st.write(territory)
-                        st.markdown(
-                            get_download_link(territory, f"territory_{i+1}.csv"),
-                            unsafe_allow_html=True
-                        )
+                # Allow download of results
+                csv = distributed_df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="Download CSV",
+                    data=csv,
+                    file_name="distributed_territories.csv",
+                    mime="text/csv"
+                )
+            except Exception as e:
+                st.error(f"An error occurred: {e}")
 
 if __name__ == "__main__":
     main()
