@@ -44,7 +44,7 @@ def load_data(file) -> Optional[pd.DataFrame]:
 
 def distribute_territories(df: pd.DataFrame, num_territories: int, balance_columns: List[str]) -> List[pd.DataFrame]:
     """Distribute clients into territories, balancing both count and total value."""
-    territories = [[] for _ in range(num_territories)]
+    territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
 
     # Calculate total values for balancing columns
     df["_total"] = df[balance_columns].applymap(clean_numeric_value).sum(axis=1)
@@ -55,24 +55,37 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     territory_sums = np.zeros(num_territories)
     territory_counts = np.zeros(num_territories)
 
-    # Adaptive weight adjustment based on distribution progress
     total_clients = len(df_sorted)
+
+    # Initial round-robin distribution
     for idx, row in df_sorted.iterrows():
-        # Adjust weights dynamically based on progress
-        progress_ratio = idx / total_clients
-        weight_count = 0.8 * (1 - progress_ratio) + 0.2
+        territories[idx % num_territories] = pd.concat([territories[idx % num_territories], pd.DataFrame([row])], ignore_index=True)
+        territory_counts[idx % num_territories] += 1
+        territory_sums[idx % num_territories] += row["_total"]
+
+    # Adjust distribution dynamically
+    for idx, row in df_sorted.iterrows():
+        weight_count = 0.9 if idx < len(df_sorted) * 0.3 else 0.5
         weight_sum = 1 - weight_count
 
-        # Calculate a composite score for each territory
-        min_idx = np.argmin(territory_counts * weight_count + territory_sums * weight_sum)
-        territories[min_idx].append(row)
+        scores = [
+            (
+                territory_counts[i] * weight_count +
+                territory_sums[i] * weight_sum +
+                (float('inf') if territory_counts[i] > total_clients / num_territories * 1.1 else 0)
+            )
+            for i in range(num_territories)
+        ]
+        min_idx = np.argmin(scores)
+
+        territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([row])], ignore_index=True)
         territory_counts[min_idx] += 1
         territory_sums[min_idx] += row["_total"]
 
-    # Convert lists of rows into DataFrames
-    territories = [pd.DataFrame(territory).drop(columns=["_total"]) for territory in territories]
-    for i, territory in enumerate(territories):
-        territory.insert(0, "Territory", i + 1)
+    # Final rebalancing to ensure equity
+    for i in range(num_territories):
+        territories[i] = territories[i].drop(columns=["_total"])
+        territories[i].insert(0, "Territory", i + 1)
 
     logging.info(f"Total territories created: {len(territories)}")
     return territories
