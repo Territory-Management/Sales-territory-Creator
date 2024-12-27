@@ -36,6 +36,7 @@ def load_data(file) -> Optional[pd.DataFrame]:
         if df.columns[0].startswith("Unnamed:"):
             df.rename(columns={df.columns[0]: "Code client"}, inplace=True)
 
+        # Convert date column to datetime
         if "Dt resiliation contrat all" in df.columns:
             df["Dt resiliation contrat all"] = pd.to_datetime(df["Dt resiliation contrat all"], errors="coerce")
 
@@ -66,22 +67,15 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     territory_sums = np.zeros(num_territories)
     territory_counts = np.zeros(num_territories)
 
-    # Initial round-robin distribution for even start
+    # Assign rows to territories in a balanced way
     for idx, row in df_sorted.iterrows():
-        min_idx = idx % num_territories
+        # Calculate a composite score for each territory, dynamically adjusting weights
+        weight_count = 0.7 if idx < len(df_sorted) * 0.3 else 0.5
+        weight_sum = 1 - weight_count
+        min_idx = np.argmin(territory_counts * weight_count + territory_sums * weight_sum)
         territories[min_idx].append(row)
         territory_counts[min_idx] += 1
         territory_sums[min_idx] += row["_total"]
-
-    # Iterative balancing
-    for _ in range(10):
-        for idx, row in df_sorted.iterrows():
-            weight_count = 0.8 if idx < len(df_sorted) * 0.2 else 0.5
-            weight_sum = 1 - weight_count
-            min_idx = np.argmin(territory_counts * weight_count + territory_sums * weight_sum)
-            territories[min_idx].append(row)
-            territory_counts[min_idx] += 1
-            territory_sums[min_idx] += row["_total"]
 
     # Convert lists of rows into DataFrames
     for i in range(num_territories):
@@ -146,7 +140,9 @@ def main():
             )
 
             if st.button("Create Territories"):
-                territories = distribute_territories(df_filtered, num_territories, balance_columns)
+                with st.spinner("Distributing territories..."):
+                    territories = distribute_territories(df_filtered, num_territories, balance_columns)
+                
                 metrics = get_territory_metrics(territories, balance_columns)
 
                 # Display metrics
