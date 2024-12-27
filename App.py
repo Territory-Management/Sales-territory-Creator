@@ -3,9 +3,8 @@ import pandas as pd
 import base64
 import logging
 import re
-from typing import List, Optional
+from typing import List, Optional, Dict
 from datetime import datetime
-import numpy as np
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -54,64 +53,131 @@ def filter_rows(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 def distribute_territories(df: pd.DataFrame, num_territories: int, balance_columns: List[str]) -> List[pd.DataFrame]:
-    """Distribute clients into territories, balancing both count and total value."""
-    territories = [[] for _ in range(num_territories)]
-
-    # Calculate total values for balancing columns
-    df["_total"] = df[balance_columns].applymap(clean_numeric_value).sum(axis=1)
-
-    # Shuffle and sort by total value
-    df_sorted = df.sample(frac=1, random_state=42).sort_values("_total", ascending=False).reset_index(drop=True)
-
-    territory_sums = np.zeros(num_territories)
-    territory_counts = np.zeros(num_territories)
-
-    # Adaptive weight adjustment based on distribution progress
-    total_clients = len(df_sorted)
-    for idx, row in df_sorted.iterrows():
-        # Adjust weights dynamically based on progress
-        progress_ratio = idx / total_clients
-        weight_count = 0.8 * (1 - progress_ratio) + 0.2
-        weight_sum = 1 - weight_count
-
-        # Calculate a composite score for each territory
-        min_idx = np.argmin(territory_counts * weight_count + territory_sums * weight_sum)
-        territories[min_idx].append(row)
-        territory_counts[min_idx] += 1
-        territory_sums[min_idx] += row["_total"]
-
-    # Convert lists of rows into DataFrames
+    """
+    Distribute clients into territories, balancing both count and total values using a weighted approach
+    and greedy assignment with normalization.
+    """
+    territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
+    
+    # Calculate total values for balancing columns and normalize them
+    df = df.copy()
+    
+    # Calculate weighted total based on all balance columns
+    df["_total"] = 0
+    for col in balance_columns:
+        df[f"_normalized_{col}"] = df[col].apply(clean_numeric_value)
+        max_val = df[f"_normalized_{col}"].max()
+        if max_val > 0:
+            df[f"_normalized_{col}"] = df[f"_normalized_{col}"] / max_val
+        df["_total"] += df[f"_normalized_{col}"]
+    
+    # Sort by total value to handle largest accounts first
+    df_sorted = df.sample(frac=1, random_state=42).sort_values("_total", ascending=False)
+    
+    # Initialize tracking variables
+    territory_metrics = {i: {
+        "count": 0,
+        "total": 0.0,
+        "column_totals": {col: 0.0 for col in balance_columns}
+    } for i in range(num_territories)}
+    
+    target_count = len(df) / num_territories
+    
+    def calculate_territory_score(territory_idx: int, row: pd.Series) -> float:
+        """
+        Calculate a score for assigning a row to a territory based on multiple factors.
+        Lower score is better.
+        """
+        metrics = territory_metrics[territory_idx]
+        
+        # Count balance factor (how far from target count)
+        count_factor = metrics["count"] / target_count if target_count > 0 else 0
+        
+        # Value balance factors for each column
+        value_factors = []
+        for col in balance_columns:
+            territory_total = metrics["column_totals"][col]
+            row_value = clean_numeric_value(row[col])
+            if row_value > 0:
+                value_factors.append(territory_total / row_value)
+        
+        avg_value_factor = sum(value_factors) / len(value_factors) if value_factors else 1
+        
+        # Weights for different factors
+        COUNT_WEIGHT = 0.4
+        VALUE_WEIGHT = 0.6
+        
+        return (count_factor * COUNT_WEIGHT) + (avg_value_factor * VALUE_WEIGHT)
+    
+    # Assign rows to territories
+    for _, row in df_sorted.iterrows():
+        # Find the territory with the lowest combined score
+        best_territory = min(range(num_territories),
+                           key=lambda i: calculate_territory_score(i, row))
+        
+        # Assign to the selected territory
+        territories[best_territory] = pd.concat([territories[best_territory], 
+                                              pd.DataFrame([row])], 
+                                              ignore_index=True)
+        
+        # Update territory metrics
+        territory_metrics[best_territory]["count"] += 1
+        territory_metrics[best_territory]["total"] += row["_total"]
+        for col in balance_columns:
+            territory_metrics[best_territory]["column_totals"][col] += clean_numeric_value(row[col])
+    
+    # Clean up temporary columns and add territory numbers
+    normalized_cols = ["_total"] + [f"_normalized_{col}" for col in balance_columns]
     for i in range(num_territories):
-        territories[i] = pd.DataFrame(territories[i]).drop(columns=["_total"])
+        territories[i] = territories[i].drop(columns=normalized_cols)
         territories[i].insert(0, "Territory", i + 1)
-
-    # Post-processing to correct imbalances
-    max_count_threshold = np.mean(territory_counts) * 1.05  # Allow 5% deviation
-    for i in range(num_territories):
-        # If a territory exceeds the threshold, redistribute some clients
-        if territory_counts[i] > max_count_threshold:
-            for row in territories[i].iterrows():
-                # Find a new territory with less than average count
-                for j in range(num_territories):
-                    if territory_counts[j] < np.mean(territory_counts):
-                        territories[j] = pd.concat([territories[j], pd.DataFrame([row[1]])], ignore_index=True)
-                        territory_counts[j] += 1
-                        territory_counts[i] -= 1
-                        break
-
-    logging.info(f"Total territories created: {len(territories)}")
+        
+        # Log distribution metrics
+        logging_msg = f"Territory {i+1} - Count: {territory_metrics[i]['count']}"
+        for col in balance_columns:
+            logging_msg += f", {col} Total: {territory_metrics[i]['column_totals'][col]:.2f}"
+        logging.info(logging_msg)
+    
     return territories
 
 def get_territory_metrics(territories: List[pd.DataFrame], balance_columns: List[str]) -> pd.DataFrame:
-    """Calculate metrics for each territory."""
+    """Calculate detailed metrics for each territory including variance statistics."""
     metrics = []
+    
     for i, territory in enumerate(territories):
-        metric = {"Territory": i + 1, "Count": len(territory)}
+        metric = {
+            "Territory": i + 1,
+            "Count": len(territory)
+        }
+        
+        # Calculate totals, averages, and standard deviations for each balance column
         for col in balance_columns:
-            total = territory[col].apply(clean_numeric_value).sum()
-            metric[f"{col}_total"] = total
+            values = territory[col].apply(clean_numeric_value)
+            total = values.sum()
+            avg = total / len(territory) if len(territory) > 0 else 0
+            std = values.std() if len(territory) > 0 else 0
+            
+            metric.update({
+                f"{col}_total": total,
+                f"{col}_avg": avg,
+                f"{col}_std": std,
+                f"{col}_min": values.min() if len(territory) > 0 else 0,
+                f"{col}_max": values.max() if len(territory) > 0 else 0
+            })
+        
         metrics.append(metric)
-    return pd.DataFrame(metrics)
+    
+    metrics_df = pd.DataFrame(metrics)
+    
+    # Add summary statistics for the entire distribution
+    summary_row = {"Territory": "Summary"}
+    for col in metrics_df.columns:
+        if col != "Territory":
+            summary_row[col] = metrics_df[col].mean()
+    
+    metrics_df = pd.concat([metrics_df, pd.DataFrame([summary_row])], ignore_index=True)
+    
+    return metrics_df
 
 def get_download_link(df: pd.DataFrame, filename: str) -> str:
     """Generate a CSV download link for a DataFrame."""
@@ -121,6 +187,16 @@ def get_download_link(df: pd.DataFrame, filename: str) -> str:
 
 def main():
     st.title("Territory Distribution Tool")
+    
+    st.sidebar.header("Configuration")
+    # Add configuration options in sidebar
+    balance_weights = st.sidebar.slider(
+        "Balance Weight (Higher values favor value balance over count balance)",
+        min_value=0.0,
+        max_value=1.0,
+        value=0.6,
+        step=0.1
+    )
 
     uploaded_file = st.file_uploader("Upload CSV file", type="csv")
     if uploaded_file:
@@ -132,12 +208,12 @@ def main():
 
             # Filter rows based on resiliation date
             df_filtered = filter_rows(df)
-            st.write("Filtered Data Preview (Rows with valid resiliation dates):", df_filtered.head())
+            st.write(f"Filtered Data Preview ({len(df_filtered)} rows):", df_filtered.head())
 
             # Select balance columns
-            available_columns = [col for col in df_filtered.columns if col not in ["Code client", "Dt resiliation contrat all"]]
-            st.write("Available columns for balancing:", available_columns)
-
+            available_columns = [col for col in df_filtered.columns 
+                               if col not in ["Code client", "Dt resiliation contrat all", "Territory"]]
+            
             balance_columns = st.multiselect(
                 "Select columns to balance",
                 options=available_columns,
@@ -153,31 +229,53 @@ def main():
                 "Number of territories",
                 min_value=2,
                 max_value=len(df_filtered),
-                value=2
+                value=min(4, len(df_filtered))
             )
 
             if st.button("Create Territories"):
                 with st.spinner("Distributing territories..."):
                     territories = distribute_territories(df_filtered, num_territories, balance_columns)
-                
-                metrics = get_territory_metrics(territories, balance_columns)
+                    metrics = get_territory_metrics(territories, balance_columns)
 
-                # Display metrics
-                st.subheader("Territory Metrics")
-                st.write(metrics)
+                    # Display metrics
+                    st.subheader("Territory Metrics")
+                    st.dataframe(metrics)
 
-                # Combined territories
-                combined = pd.concat(territories, ignore_index=True)
-                st.markdown(get_download_link(combined, "all_territories.csv"), unsafe_allow_html=True)
+                    # Show distribution visualizations
+                    for col in balance_columns:
+                        st.subheader(f"Distribution of {col}")
+                        data = [territory[col].apply(clean_numeric_value).tolist() 
+                               for territory in territories]
+                        st.bar_chart(pd.DataFrame({
+                            f"Territory {i+1}": territory[col].apply(clean_numeric_value).sum()
+                            for i, territory in enumerate(territories)
+                        }))
 
-                # Individual territory downloads
-                for i, territory in enumerate(territories):
-                    with st.expander(f"Territory {i+1} ({len(territory)} accounts)"):
-                        st.write(territory)
-                        st.markdown(
-                            get_download_link(territory, f"territory_{i+1}.csv"),
-                            unsafe_allow_html=True
-                        )
+                    # Combined territories download
+                    combined = pd.concat(territories, ignore_index=True)
+                    st.markdown(get_download_link(combined, "all_territories.csv"), 
+                              unsafe_allow_html=True)
+
+                    # Individual territory downloads
+                    for i, territory in enumerate(territories):
+                        with st.expander(f"Territory {i+1} ({len(territory)} accounts)"):
+                            st.dataframe(territory)
+                            st.markdown(
+                                get_download_link(territory, f"territory_{i+1}.csv"),
+                                unsafe_allow_html=True
+                            )
+
+                    # Calculate and display distribution quality metrics
+                    quality_metrics = {}
+                    for col in balance_columns:
+                        totals = [territory[col].apply(clean_numeric_value).sum() 
+                                for territory in territories]
+                        quality_metrics[col] = {
+                            'Coefficient of Variation': pd.Series(totals).std() / pd.Series(totals).mean()
+                        }
+                    
+                    st.subheader("Distribution Quality Metrics")
+                    st.dataframe(pd.DataFrame(quality_metrics))
 
 if __name__ == "__main__":
     main()
