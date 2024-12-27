@@ -66,25 +66,38 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     territory_sums = np.zeros(num_territories)
     territory_counts = np.zeros(num_territories)
 
-    # Initial round-robin distribution for even start
+    # Adaptive weight adjustment based on distribution progress
+    total_clients = len(df_sorted)
     for idx, row in df_sorted.iterrows():
-        territories[idx % num_territories].append(row)
-        territory_counts[idx % num_territories] += 1
-        territory_sums[idx % num_territories] += row["_total"]
-
-    # Iterative balancing adjustment
-    for idx, row in df_sorted.iterrows():
-        weight_count = 0.8 if idx < len(df_sorted) * 0.2 else 0.5
+        # Adjust weights dynamically based on progress
+        progress_ratio = idx / total_clients
+        weight_count = 0.8 * (1 - progress_ratio) + 0.2
         weight_sum = 1 - weight_count
+
+        # Calculate a composite score for each territory
         min_idx = np.argmin(territory_counts * weight_count + territory_sums * weight_sum)
         territories[min_idx].append(row)
         territory_counts[min_idx] += 1
         territory_sums[min_idx] += row["_total"]
 
-    # Fine-tuning post-processing to ensure balance
+    # Convert lists of rows into DataFrames
     for i in range(num_territories):
         territories[i] = pd.DataFrame(territories[i]).drop(columns=["_total"])
         territories[i].insert(0, "Territory", i + 1)
+
+    # Post-processing to correct imbalances
+    max_count_threshold = np.mean(territory_counts) * 1.05  # Allow 5% deviation
+    for i in range(num_territories):
+        # If a territory exceeds the threshold, redistribute some clients
+        if territory_counts[i] > max_count_threshold:
+            for row in territories[i].iterrows():
+                # Find a new territory with less than average count
+                for j in range(num_territories):
+                    if territory_counts[j] < np.mean(territory_counts):
+                        territories[j] = pd.concat([territories[j], pd.DataFrame([row[1]])], ignore_index=True)
+                        territory_counts[j] += 1
+                        territory_counts[i] -= 1
+                        break
 
     logging.info(f"Total territories created: {len(territories)}")
     return territories
