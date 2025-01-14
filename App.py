@@ -50,7 +50,10 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     territory_counts = np.zeros(num_territories)
 
     for idx, row in df_sorted.iterrows():
-        scores = territory_counts + 0.1 * territory_sums
+        # Calculate scores based on current counts and sums
+        # Adjust weights according to the importance of balancing count vs. value
+        # Here we give more weight to the value sum for balancing purposes
+        scores = (territory_counts + 1) + (territory_sums / (np.sum(territory_sums) + 1))
         min_idx = np.argmin(scores)
 
         territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([row])], ignore_index=True)
@@ -60,9 +63,7 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     # Ensure "Territory" column is added correctly
     for i in range(num_territories):
         territories[i] = territories[i].drop(columns=["_total"])
-        # Use DataFrame 'assign' method to add "Territory" column
-        if "Territory" not in territories[i].columns:
-            territories[i] = territories[i].assign(Territory=(i + 1))
+        territories[i] = territories[i].assign(Territory=(i + 1))
 
     logging.info(f"Total territories created: {len(territories)}")
     return territories
