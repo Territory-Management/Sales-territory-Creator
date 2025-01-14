@@ -57,10 +57,12 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
         territory_counts[min_idx] += 1
         territory_sums[min_idx] += row["_total"]
 
+    # Ensure "Territory" column is added correctly
     for i in range(num_territories):
         territories[i] = territories[i].drop(columns=["_total"])
+        # Use DataFrame 'assign' method to add "Territory" column
         if "Territory" not in territories[i].columns:
-            territories[i].insert(0, "Territory", i + 1)
+            territories[i] = territories[i].assign(Territory=(i + 1))
 
     logging.info(f"Total territories created: {len(territories)}")
     return territories
