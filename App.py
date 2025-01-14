@@ -36,37 +36,6 @@ def load_data(file) -> Optional[pd.DataFrame]:
         st.error(f"Error loading file: {e}")
         return None
 
-def refine_distribution(territories: List[pd.DataFrame], num_territories: int, target_sum: float) -> List[pd.DataFrame]:
-    """Refine the distribution of territories to better balance the total sums."""
-    # Calculate current sums
-    current_sums = [territory["_total"].sum() for territory in territories]
-
-    # Iterate and adjust assignments
-    for _ in range(10):  # Limit to a fixed number of iterations for simplicity
-        for i in range(num_territories):
-            if current_sums[i] > target_sum:
-                # Find the row that, if moved, would most improve balance
-                for j in range(num_territories):
-                    if i != j and current_sums[j] < target_sum:
-                        # Potential move: check if moving the largest entry from i to j improves balance
-                        largest_entry_idx = territories[i]["_total"].idxmax()
-                        largest_entry = territories[i].loc[largest_entry_idx]
-
-                        # Calculate potential new sums
-                        new_sum_i = current_sums[i] - largest_entry["_total"]
-                        new_sum_j = current_sums[j] + largest_entry["_total"]
-
-                        if abs(new_sum_i - target_sum) + abs(new_sum_j - target_sum) < abs(current_sums[i] - target_sum) + abs(current_sums[j] - target_sum):
-                            # Move the entry
-                            territories[j] = pd.concat([territories[j], largest_entry.to_frame().T], ignore_index=True)
-                            territories[i] = territories[i].drop(largest_entry_idx).reset_index(drop=True)
-
-                            # Update sums
-                            current_sums[i] = new_sum_i
-                            current_sums[j] = new_sum_j
-
-    return territories
-
 def distribute_territories(df: pd.DataFrame, num_territories: int, balance_columns: List[str]) -> List[pd.DataFrame]:
     """Distribute clients into territories, balancing both count and total value."""
     # Calculate total values for balancing columns
@@ -78,25 +47,12 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     # Initialize territories
     territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
     territory_sums = np.zeros(num_territories)
-    territory_counts = np.zeros(num_territories)
-
-    # Dynamic weighting for balancing values
-    total_value = df_sorted["_total"].sum()
-    average_value_per_territory = total_value / num_territories
 
     for idx, row in df_sorted.iterrows():
-        # Calculate scores based on current counts and sums
-        # Dynamic weighting based on disparity from average
-        value_disparity = np.abs(territory_sums - average_value_per_territory)
-        scores = territory_counts + value_disparity / average_value_per_territory
-        min_idx = np.argmin(scores)
-
+        # Assign to territory with the lowest total value
+        min_idx = np.argmin(territory_sums)
         territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([row])], ignore_index=True)
-        territory_counts[min_idx] += 1
         territory_sums[min_idx] += row["_total"]
-
-    # Perform refinement to improve balance
-    territories = refine_distribution(territories, num_territories, average_value_per_territory)
 
     # Ensure "Territory" column is added correctly
     for i in range(num_territories):
