@@ -49,11 +49,15 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     territory_sums = np.zeros(num_territories)
     territory_counts = np.zeros(num_territories)
 
+    # Dynamic weighting for balancing values
+    total_value = df_sorted["_total"].sum()
+    average_value_per_territory = total_value / num_territories
+
     for idx, row in df_sorted.iterrows():
         # Calculate scores based on current counts and sums
-        # Adjust weights according to the importance of balancing count vs. value
-        # Here we give more weight to the value sum for balancing purposes
-        scores = (territory_counts + 1) + (territory_sums / (np.sum(territory_sums) + 1))
+        # Dynamic weighting based on disparity from average
+        value_disparity = np.abs(territory_sums - average_value_per_territory)
+        scores = territory_counts + value_disparity / average_value_per_territory
         min_idx = np.argmin(scores)
 
         territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([row])], ignore_index=True)
