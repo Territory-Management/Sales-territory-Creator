@@ -36,6 +36,32 @@ def load_data(file) -> Optional[pd.DataFrame]:
         st.error(f"Error loading file: {e}")
         return None
 
+def refine_distribution(territories: List[pd.DataFrame], num_territories: int) -> List[pd.DataFrame]:
+    """Refine the distribution of territories to better balance the total sums."""
+    current_sums = np.array([territory["_total"].sum() for territory in territories])
+    target_sum = current_sums.mean()
+
+    for _ in range(10):  # Limit to a fixed number of iterations
+        for i in range(num_territories):
+            for j in range(num_territories):
+                if i != j and current_sums[i] > target_sum and current_sums[j] < target_sum:
+                    # Attempt to swap entries to balance the sums
+                    for entry_idx in territories[i].index:
+                        entry = territories[i].loc[entry_idx]
+                        potential_new_sum_i = current_sums[i] - entry["_total"]
+                        potential_new_sum_j = current_sums[j] + entry["_total"]
+
+                        if abs(potential_new_sum_i - target_sum) + abs(potential_new_sum_j - target_sum) < abs(current_sums[i] - target_sum) + abs(current_sums[j] - target_sum):
+                            # Perform the swap
+                            territories[j] = pd.concat([territories[j], entry.to_frame().T], ignore_index=True)
+                            territories[i] = territories[i].drop(entry_idx).reset_index(drop=True)
+
+                            # Update sums
+                            current_sums[i] = potential_new_sum_i
+                            current_sums[j] = potential_new_sum_j
+
+    return territories
+
 def distribute_territories(df: pd.DataFrame, num_territories: int, balance_columns: List[str]) -> List[pd.DataFrame]:
     """Distribute clients into territories, balancing both count and total value."""
     # Calculate total values for balancing columns
@@ -53,6 +79,9 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
         min_idx = np.argmin(territory_sums)
         territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([row])], ignore_index=True)
         territory_sums[min_idx] += row["_total"]
+
+    # Perform refinement to improve balance
+    territories = refine_distribution(territories, num_territories)
 
     # Ensure "Territory" column is added correctly
     for i in range(num_territories):
