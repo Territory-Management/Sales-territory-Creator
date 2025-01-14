@@ -49,9 +49,7 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
     territory_sums = np.zeros(num_territories)
     territory_counts = np.zeros(num_territories)
 
-    # Distribute using a greedy algorithm
     for idx, row in df_sorted.iterrows():
-        # Calculate scores based on current counts and sums
         scores = territory_counts + 0.1 * territory_sums
         min_idx = np.argmin(scores)
 
@@ -59,10 +57,10 @@ def distribute_territories(df: pd.DataFrame, num_territories: int, balance_colum
         territory_counts[min_idx] += 1
         territory_sums[min_idx] += row["_total"]
 
-    # Remove temporary '_total' column
     for i in range(num_territories):
         territories[i] = territories[i].drop(columns=["_total"])
-        territories[i].insert(0, "Territory", i + 1)
+        if "Territory" not in territories[i].columns:
+            territories[i].insert(0, "Territory", i + 1)
 
     logging.info(f"Total territories created: {len(territories)}")
     return territories
