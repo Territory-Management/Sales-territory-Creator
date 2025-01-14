@@ -3,7 +3,7 @@ import pandas as pd
 import base64
 import logging
 import re
-from typing import List, Optional, Tuple
+from typing import List, Optional
 import numpy as np
 
 # Configure logging
@@ -36,41 +36,30 @@ def load_data(file) -> Optional[pd.DataFrame]:
         st.error(f"Error loading file: {e}")
         return None
 
-def calculate_scores(territory_counts: np.ndarray, territory_sums: np.ndarray, num_territories: int,
-                     total_clients: int, weight_count: float, weight_sum: float) -> np.ndarray:
-    """Calculate scores for territory distribution."""
-    return np.array([
-        territory_counts[i] * weight_count +
-        territory_sums[i] * weight_sum +
-        (float('inf') if territory_counts[i] > total_clients / num_territories * 1.1 else 0)
-        for i in range(num_territories)
-    ])
-
 def distribute_territories(df: pd.DataFrame, num_territories: int, balance_columns: List[str]) -> List[pd.DataFrame]:
     """Distribute clients into territories, balancing both count and total value."""
-    territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
+    # Calculate total values for balancing columns
     df["_total"] = df[balance_columns].applymap(clean_numeric_value).sum(axis=1)
-    df_sorted = df.sample(frac=1, random_state=42).sort_values("_total", ascending=False).reset_index(drop=True)
 
+    # Sort by total value
+    df_sorted = df.sort_values("_total", ascending=False).reset_index(drop=True)
+
+    # Initialize territories
+    territories = [pd.DataFrame(columns=df.columns) for _ in range(num_territories)]
     territory_sums = np.zeros(num_territories)
     territory_counts = np.zeros(num_territories)
-    total_clients = len(df_sorted)
 
+    # Distribute using a greedy algorithm
     for idx, row in df_sorted.iterrows():
-        territories[idx % num_territories] = pd.concat([territories[idx % num_territories], pd.DataFrame([row])], ignore_index=True)
-        territory_counts[idx % num_territories] += 1
-        territory_sums[idx % num_territories] += row["_total"]
-
-    for idx, row in df_sorted.iterrows():
-        weight_count = 0.9 if idx < len(df_sorted) * 0.3 else 0.5
-        weight_sum = 1 - weight_count
-        scores = calculate_scores(territory_counts, territory_sums, num_territories, total_clients, weight_count, weight_sum)
+        # Calculate scores based on current counts and sums
+        scores = territory_counts + 0.1 * territory_sums
         min_idx = np.argmin(scores)
 
         territories[min_idx] = pd.concat([territories[min_idx], pd.DataFrame([row])], ignore_index=True)
         territory_counts[min_idx] += 1
         territory_sums[min_idx] += row["_total"]
 
+    # Remove temporary '_total' column
     for i in range(num_territories):
         territories[i] = territories[i].drop(columns=["_total"])
         territories[i].insert(0, "Territory", i + 1)
